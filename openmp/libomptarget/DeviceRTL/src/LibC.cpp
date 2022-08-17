@@ -722,7 +722,12 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) { return 0; }
 
 void srand(unsigned seed) {}
 
-int rand() { return 1024; }
+int rand(void) // RAND_MAX assumed to be 32767
+{
+  static int next = 1;
+  next = next * 1103515245 + 12345;
+  return (unsigned int)(next/65536) % 32768;
+}
 
 int abs(int n) { return n > 0 ? n : -n; }
 
