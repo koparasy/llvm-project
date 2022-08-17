@@ -42,6 +42,75 @@ llvm::Function *GetVprintfDeclaration(llvm::Module &M) {
       VprintfFuncType, llvm::GlobalVariable::ExternalLinkage, "vprintf", &M);
 }
 
+llvm::Function *GetOpenMPSscanfDeclaration(CodeGenModule &CGM) {
+  const char *Name = "__llvm_omp_sscanf";
+  llvm::Module &M = CGM.getModule();
+  llvm::Type *ArgTypes[] = {llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt32Ty(M.getContext())};
+  llvm::FunctionType *VprintfFuncType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(M.getContext()), ArgTypes, false);
+
+  if (auto *F = M.getFunction(Name)) {
+    if (F->getFunctionType() != VprintfFuncType) {
+      CGM.Error(SourceLocation(),
+                "Invalid type declaration for __llvm_omp_sscanf");
+      return nullptr;
+    }
+    return F;
+  }
+
+  return llvm::Function::Create(
+      VprintfFuncType, llvm::GlobalVariable::ExternalLinkage, Name, &M);
+}
+
+llvm::Function *GetOpenMPFprintfDeclaration(CodeGenModule &CGM) {
+  const char *Name = "__llvm_omp_fprintf";
+  llvm::Module &M = CGM.getModule();
+  llvm::Type *ArgTypes[] = {llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt32Ty(M.getContext())};
+  llvm::FunctionType *VprintfFuncType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(M.getContext()), ArgTypes, false);
+
+  if (auto *F = M.getFunction(Name)) {
+    if (F->getFunctionType() != VprintfFuncType) {
+      CGM.Error(SourceLocation(),
+                "Invalid type declaration for __llvm_omp_fprintf");
+      return nullptr;
+    }
+    return F;
+  }
+
+  return llvm::Function::Create(
+      VprintfFuncType, llvm::GlobalVariable::ExternalLinkage, Name, &M);
+}
+
+llvm::Function *GetOpenMPSprintfDeclaration(CodeGenModule &CGM) {
+  const char *Name = "__llvm_omp_sprintf";
+  llvm::Module &M = CGM.getModule();
+  llvm::Type *ArgTypes[] = {llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt8PtrTy(M.getContext()),
+                            llvm::Type::getInt32Ty(M.getContext())};
+  llvm::FunctionType *VprintfFuncType = llvm::FunctionType::get(
+      llvm::Type::getInt32Ty(M.getContext()), ArgTypes, false);
+
+  if (auto *F = M.getFunction(Name)) {
+    if (F->getFunctionType() != VprintfFuncType) {
+      CGM.Error(SourceLocation(),
+                "Invalid type declaration for __llvm_omp_sprintf");
+      return nullptr;
+    }
+    return F;
+  }
+
+  return llvm::Function::Create(
+      VprintfFuncType, llvm::GlobalVariable::ExternalLinkage, Name, &M);
+}
+
 llvm::Function *GetOpenMPVprintfDeclaration(CodeGenModule &CGM) {
   const char *Name = "__llvm_omp_vprintf";
   llvm::Module &M = CGM.getModule();
@@ -91,19 +160,20 @@ llvm::Function *GetOpenMPVprintfDeclaration(CodeGenModule &CGM) {
 // standard C vararg promotion (short -> int, float -> double, etc.).
 
 std::pair<llvm::Value *, llvm::TypeSize>
-packArgsIntoNVPTXFormatBuffer(CodeGenFunction *CGF, const CallArgList &Args) {
+packArgsIntoNVPTXFormatBuffer(CodeGenFunction *CGF, const CallArgList &Args,
+                              unsigned NumArgs = 1) {
   const llvm::DataLayout &DL = CGF->CGM.getDataLayout();
   llvm::LLVMContext &Ctx = CGF->CGM.getLLVMContext();
   CGBuilderTy &Builder = CGF->Builder;
 
   // Construct and fill the args buffer that we'll pass to vprintf.
-  if (Args.size() <= 1) {
+  if (Args.size() <= NumArgs) {
     // If there are no args, pass a null pointer and size 0
     llvm::Value * BufferPtr = llvm::ConstantPointerNull::get(llvm::Type::getInt8PtrTy(Ctx));
     return {BufferPtr, llvm::TypeSize::Fixed(0)};
   } else {
     llvm::SmallVector<llvm::Type *, 8> ArgTypes;
-    for (unsigned I = 1, NumArgs = Args.size(); I < NumArgs; ++I)
+    for (unsigned I = NumArgs, ArgsEnd = Args.size(); I < ArgsEnd; ++I)
       ArgTypes.push_back(Args[I].getRValue(*CGF).getScalarVal()->getType());
 
     // Using llvm::StructType is correct only because printf doesn't accept
@@ -111,11 +181,11 @@ packArgsIntoNVPTXFormatBuffer(CodeGenFunction *CGF, const CallArgList &Args) {
     // compute the offsets within the alloca -- we wouldn't be able to assume
     // that the alignment of the llvm type was the same as the alignment of the
     // clang type.
-    llvm::Type *AllocaTy = llvm::StructType::create(ArgTypes, "printf_args");
+    llvm::Type *AllocaTy = llvm::StructType::create(ArgTypes, "vararg_args");
     llvm::Value *Alloca = CGF->CreateTempAlloca(AllocaTy);
 
-    for (unsigned I = 1, NumArgs = Args.size(); I < NumArgs; ++I) {
-      llvm::Value *P = Builder.CreateStructGEP(AllocaTy, Alloca, I - 1);
+    for (unsigned I = NumArgs, ArgsEnd = Args.size(); I < ArgsEnd; ++I) {
+      llvm::Value *P = Builder.CreateStructGEP(AllocaTy, Alloca, I - NumArgs);
       llvm::Value *Arg = Args[I].getRValue(*CGF).getScalarVal();
       Builder.CreateAlignedStore(Arg, P, DL.getPrefTypeAlign(Arg->getType()));
     }
@@ -131,38 +201,39 @@ bool containsNonScalarVarargs(CodeGenFunction *CGF, CallArgList Args) {
   });
 }
 
-RValue EmitDevicePrintfCallExpr(const CallExpr *E, CodeGenFunction *CGF,
-                                llvm::Function *Decl, bool WithSizeArg) {
+RValue EmitDeviceVarArgCallExpr(const CallExpr *E, CodeGenFunction *CGF,
+                                llvm::Function *Decl, bool WithSizeArg,
+                                unsigned GivenArgs = 1) {
   CodeGenModule &CGM = CGF->CGM;
   CGBuilderTy &Builder = CGF->Builder;
-  assert(E->getBuiltinCallee() == Builtin::BIprintf);
-  assert(E->getNumArgs() >= 1); // printf always has at least one arg.
 
   // Uses the same format as nvptx for the argument packing, but also passes
   // an i32 for the total size of the passed pointer
   CallArgList Args;
   CGF->EmitCallArgs(Args,
                     E->getDirectCallee()->getType()->getAs<FunctionProtoType>(),
-                    E->arguments(), E->getDirectCallee(),
-                    /* ParamsToSkip = */ 0);
+                    E->arguments(), E->getDirectCallee(), /* ParamsToSkip */ 0);
 
   // We don't know how to emit non-scalar varargs.
   if (containsNonScalarVarargs(CGF, Args)) {
-    CGM.ErrorUnsupported(E, "non-scalar arg to printf");
+    CGM.ErrorUnsupported(E, "non-scalar arg to device var-arg function");
     return RValue::get(llvm::ConstantInt::get(CGF->IntTy, 0));
   }
 
-  auto r = packArgsIntoNVPTXFormatBuffer(CGF, Args);
-  llvm::Value *BufferPtr = r.first;
+  auto R = packArgsIntoNVPTXFormatBuffer(CGF, Args, GivenArgs);
+  llvm::Value *BufferPtr = R.first;
 
-  llvm::SmallVector<llvm::Value *, 3> Vec = {
-      Args[0].getRValue(*CGF).getScalarVal(), BufferPtr};
+  llvm::SmallVector<llvm::Value *, 3> Vec;
+  for (unsigned I = 0; I < GivenArgs; ++I)
+    Vec.push_back(Args[I].getRValue(*CGF).getScalarVal());
+  Vec.push_back(BufferPtr);
+
   if (WithSizeArg) {
     // Passing > 32bit of data as a local alloca doesn't work for nvptx or
     // amdgpu
     llvm::Constant *Size =
         llvm::ConstantInt::get(llvm::Type::getInt32Ty(CGM.getLLVMContext()),
-                               static_cast<uint32_t>(r.second.getFixedSize()));
+                               static_cast<uint32_t>(R.second.getFixedSize()));
 
     Vec.push_back(Size);
   }
@@ -172,7 +243,7 @@ RValue EmitDevicePrintfCallExpr(const CallExpr *E, CodeGenFunction *CGF,
 
 RValue CodeGenFunction::EmitNVPTXDevicePrintfCallExpr(const CallExpr *E) {
   assert(getTarget().getTriple().isNVPTX());
-  return EmitDevicePrintfCallExpr(
+  return EmitDeviceVarArgCallExpr(
       E, this, GetVprintfDeclaration(CGM.getModule()), false);
 }
 
@@ -210,6 +281,27 @@ RValue CodeGenFunction::EmitAMDGPUDevicePrintfCallExpr(const CallExpr *E) {
 RValue CodeGenFunction::EmitOpenMPDevicePrintfCallExpr(const CallExpr *E) {
   assert(getTarget().getTriple().isNVPTX() ||
          getTarget().getTriple().isAMDGCN());
-  return EmitDevicePrintfCallExpr(E, this, GetOpenMPVprintfDeclaration(CGM),
-                                  true);
+  return EmitDeviceVarArgCallExpr(E, this, GetOpenMPVprintfDeclaration(CGM),
+                                  true, /* GivenArgs */ 1);
+}
+
+RValue CodeGenFunction::EmitOpenMPDeviceSPrintfCallExpr(const CallExpr *E) {
+  assert(getTarget().getTriple().isNVPTX() ||
+         getTarget().getTriple().isAMDGCN());
+  return EmitDeviceVarArgCallExpr(E, this, GetOpenMPSprintfDeclaration(CGM),
+                                  true, /* GivenArgs */ 2);
+}
+
+RValue CodeGenFunction::EmitOpenMPDeviceFPrintfCallExpr(const CallExpr *E) {
+  assert(getTarget().getTriple().isNVPTX() ||
+         getTarget().getTriple().isAMDGCN());
+  return EmitDeviceVarArgCallExpr(E, this, GetOpenMPFprintfDeclaration(CGM),
+                                  true, /* GivenArgs */ 2);
+}
+
+RValue CodeGenFunction::EmitOpenMPDeviceSScanfCallExpr(const CallExpr *E) {
+  assert(getTarget().getTriple().isNVPTX() ||
+         getTarget().getTriple().isAMDGCN());
+  return EmitDeviceVarArgCallExpr(E, this, GetOpenMPSscanfDeclaration(CGM),
+                                  true, /* GivenArgs */ 2);
 }

@@ -492,6 +492,28 @@ bool handle_gmtime(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
   return true;
 }
 
+bool handle_fprintf(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 4);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Stream = AE.getArg<FILE *>(0);
+  auto Format = AE.getArg<const char *, true>(1);
+  auto Buffer = AE.getArg<void *, true>(2);
+  auto Size = AE.getArg<int>(3);
+
+  assert(0 && "not ready yet");
+
+  // int R = vfprintf(Stream, Format, Buffer);
+
+  // printf("vfprintf returns %d on host\n", R);
+
+  // SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
 const char *DescriptorVarName = "omptarget_hostrpc_descriptor";
 const char *FutexVarName = "omptarget_hostrpc_futex";
 const char *MemBufVarName = "omptarget_hostrpc_memory_buffer";
@@ -612,8 +634,6 @@ void runHostRPCServer(CUmodule Module, CUcontext Context,
     return;
 
   HostRPCDescriptor Descriptor;
-  CUdeviceptr DescriptorAddr;
-  HostRPCDescriptor *NullPtr = nullptr;
 
   while (IsHostRPCEnabled) {
     uint32_t F = *reinterpret_cast<uint32_t *>(FutexPtr);
@@ -650,6 +670,7 @@ void runHostRPCServer(CUmodule Module, CUcontext Context,
       SYSCALL_CASE(fgets)
       SYSCALL_CASE(strftime)
       SYSCALL_CASE(gmtime)
+      SYSCALL_CASE(fprintf)
 
 #undef SYSCALL_CASE
     default:

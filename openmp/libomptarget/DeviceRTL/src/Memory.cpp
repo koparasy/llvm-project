@@ -40,8 +40,6 @@ void *malloc(size_t Size) {
   if (Size + HeapCurPos < omptarget_device_heap_size) {
     void *R = omptarget_device_heap_buffer + HeapCurPos;
     size_t Old = atomic::add(&HeapCurPos, Size, __ATOMIC_SEQ_CST);
-    printf("malloc returns %p, old=%lu, new=%lu.\n", R, Old,
-           atomic::load(&HeapCurPos, __ATOMIC_SEQ_CST));
     return R;
   }
 

@@ -479,6 +479,30 @@ struct tm *gmtime(const time_t *timer) {
   return Wrapper.getReturnValue<struct tm *>();
 }
 
+int __llvm_omp_fprintf(FILE *stream, const char *format, void *buffer,
+                       int size) {
+  HostRPCDescriptorWrapper Wrapper(SYSCALLID_fprintf, 4);
+  if (!Wrapper.isValid())
+    return 0;
+
+  size_t Len = strlen(format) + 1;
+
+  void *Buffer = HostRPCMemAlloc(size);
+  char *Format = (char *)HostRPCMemAlloc(Len);
+  __builtin_memcpy(Buffer, buffer, size);
+  __builtin_memcpy(Format, format, Len);
+
+  Wrapper.addArg(stream, ARG_LITERAL, sizeof(FILE *));
+  Wrapper.addArg(Format, ARG_LITERAL, Len);
+  Wrapper.addArg(Buffer, ARG_LITERAL, size);
+  Wrapper.addArg(size, ARG_LITERAL, sizeof(int));
+
+  if (!Wrapper.sendAndWait())
+    return 0;
+
+  return Wrapper.getReturnValue<int64_t>();
+}
+
 // -----------------------------------------------------------------------------
 
 long strtol(const char *str, char **str_end, int base) {
@@ -658,6 +682,31 @@ void srand(unsigned seed) {}
 int rand() { return 1024; }
 
 int abs(int n) { return n > 0 ? n : -n; }
+
+void *memcpy(void *dest, const void *src, size_t count) {
+  __builtin_memcpy(dest, src, count);
+  return dest;
+}
+
+unsigned long strtoul(const char *str, char **str_end, int base) {
+  unsigned long res = 0;
+  while (*str != '\0') {
+    if (*str == ' ') {
+      ++str;
+      continue;
+    }
+    if (*str >= '0' && *str <= '9') {
+      res = res * 10 + *str - '0';
+      ++str;
+      continue;
+    }
+    break;
+  }
+
+  if (*str_end)
+    *str_end = const_cast<char *>(str);
+  return res;
+}
 }
 
 #pragma omp end declare target

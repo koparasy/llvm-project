@@ -35,7 +35,7 @@ __device__ void CheckNoArgs() {
 // statement.
 __device__ bool foo();
 __device__ void CheckAllocaIsInEntryBlock() {
-  // CHECK: alloca %printf_args
+  // CHECK: alloca %vararg_args
   // CHECK: call {{.*}} @_Z3foov()
   if (foo()) {
     printf("%d", 42);

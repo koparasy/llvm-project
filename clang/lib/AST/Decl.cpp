@@ -3422,20 +3422,24 @@ unsigned FunctionDecl::getBuiltinID(bool ConsiderWrapperFunctions) const {
       Context.BuiltinInfo.isPredefinedLibFunction(BuiltinID))
     return 0;
 
-  // CUDA does not have device-side standard library. printf and malloc are the
+  // CUDA does not have device-side standard library. the following are the
   // only special cases that are supported by device-side runtime.
   if (Context.getLangOpts().CUDA && hasAttr<CUDADeviceAttr>() &&
-      !hasAttr<CUDAHostAttr>() &&
+      !hasAttr<CUDAHostAttr>() && !Context.getLangOpts().OpenMPIsDevice &&
       !(BuiltinID == Builtin::BIprintf || BuiltinID == Builtin::BImalloc))
     return 0;
 
-  // As AMDGCN implementation of OpenMP does not have a device-side standard
-  // library, none of the predefined library functions except printf and malloc
-  // should be treated as a builtin i.e. 0 should be returned for them.
-  if (Context.getTargetInfo().getTriple().isAMDGCN() &&
+  // As the CUDA or AMDGCN implementation of OpenMP does not have a device-side
+  // standard library, none of the predefined library functions except the
+  // following should be treated as a builtin i.e. 0 should be returned for
+  // them.
+  if ((Context.getTargetInfo().getTriple().isAMDGCN() ||
+       Context.getTargetInfo().getTriple().isNVPTX()) &&
       Context.getLangOpts().OpenMPIsDevice &&
       Context.BuiltinInfo.isPredefinedLibFunction(BuiltinID) &&
-      !(BuiltinID == Builtin::BIprintf || BuiltinID == Builtin::BImalloc))
+      !(BuiltinID == Builtin::BIprintf || BuiltinID == Builtin::BImalloc ||
+        BuiltinID == Builtin::BIfprintf || BuiltinID == Builtin::BIsprintf ||
+        BuiltinID == Builtin::BIsscanf))
     return 0;
 
   return BuiltinID;

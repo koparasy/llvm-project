@@ -12,6 +12,6 @@ struct Struct {
   int y;
 };
 __device__ void PrintfNonScalar() {
-  // CHECK: cannot compile this non-scalar arg to printf
+  // CHECK: error: cannot compile this non-scalar arg to device var-arg function yet
   printf("%d", Struct());
 }

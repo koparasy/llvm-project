@@ -46,3 +46,5 @@ srand
 rand
 abs
 fwrite
+memcpy
+strtoul

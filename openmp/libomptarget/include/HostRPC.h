@@ -27,6 +27,7 @@ enum SyscallId {
   SYSCALLID_fgets = 14,
   SYSCALLID_strftime = 15,
   SYSCALLID_gmtime = 16,
+  SYSCALLID_fprintf = 17,
 };
 
 enum ExecutionStatus {
