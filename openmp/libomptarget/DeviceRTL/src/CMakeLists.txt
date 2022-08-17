@@ -3,7 +3,6 @@ target_sources(omptarget.devicertl PRIVATE
   Debug.cpp
   Kernel.cpp
   Mapping.cpp
-  Memory.cpp
   Misc.cpp
   Parallelism.cpp
   Reduction.cpp

@@ -1003,7 +1003,7 @@ public:
           }
 
           CUdeviceptr BufferPtr;
-          size_t HeapSize = 1024U * 1024 * 1024 * 2;
+          size_t HeapSize = 6442450944U;
 
           Err = cuMemAlloc(&BufferPtr, HeapSize);
           if (Err != CUDA_SUCCESS) {
