@@ -49,6 +49,8 @@ size_t strlen(const char *str);
 
 int atoi(const char *str);
 
+float atof( const char *str);
+
 int fputs(const char *str, FILE *stream);
 
 int fprintf(FILE *stream, const char *format, ...);
@@ -86,6 +88,7 @@ void rewind(FILE *stream);
 char *strchr(const char *str, int ch);
 
 char *strtok(char *str, const char *delim);
+double strtod(const char *nptr, char **endptr); 
 
 const unsigned short **__ctype_b_loc(void);
 
