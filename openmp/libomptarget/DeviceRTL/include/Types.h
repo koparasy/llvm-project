@@ -34,6 +34,10 @@ using int64_t = long;
 using uint64_t = unsigned long;
 using size_t = decltype(sizeof(char));
 
+using clock_t = long int;
+using time_t = long;
+using clockid_t = int;
+
 static_assert(sizeof(int8_t) == 1, "type size mismatch");
 static_assert(sizeof(uint8_t) == 1, "type size mismatch");
 static_assert(sizeof(int16_t) == 2, "type size mismatch");

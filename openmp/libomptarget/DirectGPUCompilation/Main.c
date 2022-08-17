@@ -8,9 +8,9 @@
 
 #include <string.h>
 
-extern int user_main(int, char **);
+extern int user_main(int, char *[]);
 
-int main(int argc, char **argv) {
+int main(int argc, char *argv[]) {
 #pragma omp target enter data map(to: argv[:argc])
 
   for (int I = 0; I < argc; ++I) {

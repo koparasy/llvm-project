@@ -68,6 +68,8 @@ uint64_t load(uint64_t *Addr, int Ordering);
 /// Atomically store \p V to \p Addr with \p Ordering semantics.
 void store(uint32_t *Addr, uint32_t V, int Ordering);
 
+void store(uint64_t *Addr, uint64_t V, int Ordering);
+
 /// Atomically increment \p *Addr and wrap at \p V with \p Ordering semantics.
 uint32_t inc(uint32_t *Addr, uint32_t V, int Ordering);
 
@@ -97,13 +99,13 @@ public:
   void unlock();
 };
 
-template <typename T> class LockGaurd {
+template <typename T> class LockGuard {
   T &Lock;
 
 public:
-  explicit LockGaurd(T &L) : Lock(L) { Lock.lock(); }
+  explicit LockGuard(T &L) : Lock(L) { Lock.lock(); }
 
-  ~LockGaurd() { Lock.unlock(); }
+  ~LockGuard() { Lock.unlock(); }
 };
 
 } // namespace mutex

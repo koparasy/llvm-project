@@ -43,6 +43,10 @@ void atomicStore(uint32_t *Address, uint32_t Val, int Ordering) {
   __atomic_store_n(Address, Val, Ordering);
 }
 
+void atomicStore(uint64_t *Address, uint64_t Val, int Ordering) {
+  __atomic_store_n(Address, Val, Ordering);
+}
+
 uint32_t atomicAdd(uint32_t *Address, uint32_t Val, int Ordering) {
   return __atomic_fetch_add(Address, Val, Ordering);
 }
@@ -329,6 +333,10 @@ uint64_t atomic::load(uint64_t *Addr, int Ordering) {
 }
 
 void atomic::store(uint32_t *Addr, uint32_t V, int Ordering) {
+  impl::atomicStore(Addr, V, Ordering);
+}
+
+void atomic::store(uint64_t *Addr, uint64_t V, int Ordering) {
   impl::atomicStore(Addr, V, Ordering);
 }
 

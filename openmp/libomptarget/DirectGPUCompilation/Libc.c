@@ -10,6 +10,11 @@
 
 #include <stdio.h>
 
+#include "HostRPC.h"
+
+volatile SyscallDescriptor *omptarget_syscall_request
+    __attribute__((used, retain, weak, visibility("protected")));
+
 typedef unsigned long size_t;
 
 extern void *malloc(size_t size);
@@ -61,7 +66,52 @@ int strcasecmp(const char *string1, const char *string2) {
 
 void exit(int exit_code) {}
 
-FILE *fopen(const char *filename, const char *mode) { return NULL; }
+FILE *fopen(const char *filename, const char *mode) {
+  struct SyscallDescriptor *SD =
+      (struct SyscallDescriptor *)malloc(sizeof(struct SyscallDescriptor));
+  if (SD == NULL)
+    return NULL;
+
+  SD->Id = SYSCALLID_FOPEN;
+  SD->NumArgs = 2;
+  SD->Status = EXEC_STAT_CREATED;
+  SD->ReturnValue = NULL;
+  SD->RVSize = sizeof(void *);
+
+  struct ArgTy *Args = (struct ArgTy *)malloc(sizeof(struct ArgTy) * 2);
+  if (Args == NULL)
+    return NULL;
+
+  Args[0].Arg = filename;
+  Args[1].Arg = mode;
+  Args[0].Size = strlen(filename);
+  Args[1].Size = strlen(mode);
+
+  SD->Args = Args;
+
+  volatile struct SyscallDescriptor **GlobalSD = &omptarget_syscall_request;
+
+  if (!*GlobalSD)
+    *GlobalSD = SD;
+
+  while (SD->Status == EXEC_STAT_CREATED)
+    ;
+
+  *GlobalSD = NULL;
+
+  while (SD->Status == EXEC_STAT_RECEIVED)
+    ;
+
+  if (SD->Status == EXEC_STAT_FAILED)
+    return NULL;
+
+  FILE *R = (FILE *)SD->ReturnValue;
+
+  free(Args);
+  free(SD);
+
+  return R;
+}
 
 size_t fwrite(const void *restrict buffer, size_t size, size_t count,
               FILE *restrict stream) {

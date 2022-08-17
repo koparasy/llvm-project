@@ -13,6 +13,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cuda.h>
@@ -20,11 +21,17 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
+#include <sys/stat.h>
+#include <sys/time.h>
+
 #include "Debug.h"
 #include "DeviceEnvironment.h"
+#include "HostRPC.h"
 #include "omptarget.h"
 #include "omptargetplugin.h"
 
@@ -36,6 +43,7 @@
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 
 using namespace llvm;
+using namespace std::chrono_literals;
 
 // Utility for retrieving and printing CUDA error string.
 #ifdef OMPTARGET_DEBUG
@@ -95,6 +103,8 @@ struct KernelTy {
 };
 
 namespace {
+volatile bool IsHostRPCEnabled = false;
+
 bool checkResult(CUresult Err, const char *ErrMsg) {
   if (Err == CUDA_SUCCESS)
     return true;
@@ -102,6 +112,558 @@ bool checkResult(CUresult Err, const char *ErrMsg) {
   REPORT("%s", ErrMsg);
   CUDA_ERR_STRING(Err);
   return false;
+}
+
+class ArgumentExtractor {
+  HostRPCDescriptor &SD;
+
+public:
+  ArgumentExtractor(HostRPCDescriptor &D) : SD(D) {}
+
+  template <typename T, bool IsPointerArgument = false> T getArg(unsigned Idx) {
+    assert(Idx < SD.NumArgs && "unexpected argument index");
+    if constexpr (IsPointerArgument)
+      return reinterpret_cast<T>(SD.Args[Idx].Arg);
+
+    assert(sizeof(T) == SD.Args[Idx].Size && "type mismatch");
+    return reinterpret_cast<const T &>(SD.Args[Idx].Arg);
+  }
+};
+
+/// Return \p V aligned "upwards" according to \p Align.
+template <typename Ty1, typename Ty2> inline Ty1 align_up(Ty1 V, Ty2 Align) {
+  return ((V + Ty1(Align) - 1) / Ty1(Align)) * Ty1(Align);
+}
+
+class ManagedMemoryAllocator {
+  CUdeviceptr Buffer;
+  size_t Size;
+  size_t Cur = 0;
+  std::mutex Lock;
+
+public:
+  ManagedMemoryAllocator(size_t S) : Size(S) {
+    CUresult Err = cuMemAllocManaged(&Buffer, Size, CU_MEM_ATTACH_GLOBAL);
+    if (Err != CUDA_SUCCESS) {
+      REPORT("Failed to allocate managed memory for host RPC");
+      CUDA_ERR_STRING(Err);
+      assert(0);
+    }
+  }
+
+  void *allocate(size_t S) {
+    std::lock_guard<std::mutex> LG(Lock);
+    S = align_up(S, 16);
+    if (Cur + S < Size) {
+      void *R = (char *)Buffer + S;
+      Cur += S;
+      return R;
+    }
+    return nullptr;
+  }
+
+  void free(void *) {}
+};
+
+bool handle_fopen(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 2);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Arg1 = AE.getArg<const char *, /* IsPointerArgument */ true>(0);
+  auto Arg2 = AE.getArg<const char *, /* IsPointerArgument */ true>(1);
+
+  FILE *F = fopen(Arg1, Arg2);
+  if (F == nullptr)
+    return false;
+
+  printf("fopen returns %p on host\n", F);
+
+  SD.ReturnValue = (void *)F;
+
+  return true;
+}
+
+bool handle_fread(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 4);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto DevicePtr = AE.getArg<CUdeviceptr>(0);
+  auto Size = AE.getArg<size_t>(1);
+  auto Count = AE.getArg<size_t>(2);
+  auto S = AE.getArg<FILE *>(3);
+
+  std::vector<char> Buffer(Size * Count + 1, 0);
+
+  size_t R = fread(Buffer.data(), Size, Count, S);
+
+  printf("fread returns %zu on host\n", R);
+
+  std::copy(&Buffer[0], &Buffer[R], (char *)DevicePtr);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_stat(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 2);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Path = AE.getArg<const char *, /* IsPointerArgument */ true>(0);
+  auto BufDevPtr = AE.getArg<CUdeviceptr>(1);
+
+  struct stat HostBuf;
+  int64_t R = stat(Path, &HostBuf);
+
+  printf("stat returns %ld on host\n", R);
+
+  *reinterpret_cast<struct stat *>(BufDevPtr) = HostBuf;
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_popen(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 2);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Command = AE.getArg<const char *, /* IsPointerArgument */ true>(0);
+  auto Type = AE.getArg<const char *, /* IsPointerArgument */ true>(1);
+
+  FILE *F = popen(Command, Type);
+
+  printf("popen returns %p on host\n", F);
+
+  SD.ReturnValue = (void *)F;
+
+  return true;
+}
+
+bool handle_fwrite(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 4);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Buffer = AE.getArg<const void *, /* IsPointerArgument */ true>(0);
+  auto Size = AE.getArg<size_t>(1);
+  auto Count = AE.getArg<size_t>(2);
+  auto Stream = AE.getArg<FILE *>(3);
+
+  size_t R = fwrite(Buffer, Size, Count, Stream);
+
+  printf("fwrite returns %zu on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_fclose(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  int64_t S = fclose(AE.getArg<FILE *>(0));
+
+  printf("fclose returns %zu on host\n", S);
+
+  SD.ReturnValue = (void *)S;
+
+  return true;
+}
+
+bool handle_getc(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  int64_t R = getc(AE.getArg<FILE *>(0));
+
+  printf("getc returns %ld on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_pclose(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  int64_t R = pclose(AE.getArg<FILE *>(0));
+
+  printf("pclose returns %ld on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_fflush(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  int64_t R = fflush(AE.getArg<FILE *>(0));
+
+  printf("fflush returns %ld on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_rewind(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Stream = AE.getArg<FILE *>(0);
+
+  rewind(Stream);
+
+  SD.ReturnValue = nullptr;
+
+  return true;
+}
+
+bool handle_fseek(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 3);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Stream = AE.getArg<FILE *>(0);
+  auto Offset = AE.getArg<long>(1);
+  auto Origin = AE.getArg<int>(2);
+
+  int R = fseek(Stream, Offset, Origin);
+
+  printf("fseek returns %d on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_ftell(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  long R = ftell(AE.getArg<FILE *>(0));
+
+  printf("ftell returns %lu on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_feof(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Stream = AE.getArg<FILE *>(0);
+
+  int R = feof(Stream);
+
+  printf("feof returns %d on host\n", R);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_gettimeofday(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 2);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto TVDevPtr = AE.getArg<CUdeviceptr>(0);
+  auto TZDevPtr = AE.getArg<CUdeviceptr>(1);
+
+  struct timeval TV;
+  struct timezone TZ;
+
+  int R = gettimeofday(&TV, &TZ);
+
+  printf("gettimeofday returns %d on host\n", R);
+
+  *reinterpret_cast<struct timeval *>(TVDevPtr) = TV;
+  *reinterpret_cast<struct timezone *>(TZDevPtr) = TZ;
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_fgets(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 3);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto StrDevPtr = AE.getArg<CUdeviceptr>(0);
+  auto Count = AE.getArg<int>(1);
+  auto S = AE.getArg<FILE *>(2);
+
+  std::vector<char> Buffer(Count, 0);
+
+  char *R = fgets(Buffer.data(), Count, S);
+  if (!R)
+    return false;
+
+  printf("fgets returns %p on host\n", R);
+
+  std::copy(Buffer.begin(), Buffer.end(), (char *)StrDevPtr);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_strftime(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 4);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto StrDevPtr = AE.getArg<CUdeviceptr>(0);
+  auto Count = AE.getArg<size_t>(1);
+  auto Format = AE.getArg<const char *, true>(2);
+  auto Time = AE.getArg<const struct tm *, true>(3);
+
+  std::vector<char> Buffer(Count, 0);
+
+  size_t R = strftime(Buffer.data(), Count, Format, Time);
+  if (!R)
+    return false;
+
+  printf("strftime returns %zu on host\n", R);
+
+  std::copy(&Buffer[0], &Buffer[R], (char *)StrDevPtr);
+
+  SD.ReturnValue = (void *)R;
+
+  return true;
+}
+
+bool handle_gmtime(HostRPCDescriptor &SD, ManagedMemoryAllocator &MMA) {
+  assert(SD.NumArgs == 1);
+  assert(SD.RVSize == sizeof(void *));
+
+  ArgumentExtractor AE(SD);
+
+  auto Timer = AE.getArg<const time_t *, true>(0);
+
+  struct tm *R = gmtime(Timer);
+  if (!R)
+    return false;
+
+  printf("gmtime returns %p on host\n", R);
+
+  struct tm *DevPtr = (struct tm *)MMA.allocate(sizeof(struct tm));
+
+  *DevPtr = *R;
+
+  SD.ReturnValue = (void *)DevPtr;
+
+  return true;
+}
+
+const char *DescriptorVarName = "omptarget_hostrpc_descriptor";
+const char *FutexVarName = "omptarget_hostrpc_futex";
+const char *MemBufVarName = "omptarget_hostrpc_memory_buffer";
+const char *MemBufSizeVarName = "omptarget_hostrpc_memory_buffer_size";
+
+bool initHostRPCServer(CUmodule Module, CUcontext Context,
+                       CUdeviceptr &Descriptor, CUdeviceptr &Futex) {
+
+  CUresult Err = cuCtxSetCurrent(Context);
+  if (!checkResult(Err, "error returned from cuCtxSetCurrent"))
+    return false;
+
+  auto CheckGlobal = [Module](CUdeviceptr &Ptr, const char *Name, size_t Size) {
+    size_t CUSize;
+
+    CUresult Err = cuModuleGetGlobal(&Ptr, &CUSize, Module, Name);
+    if (Err != CUDA_SUCCESS)
+      return false;
+
+    if (CUSize != Size)
+      return false;
+
+    return true;
+  };
+
+  CUdeviceptr DescriptorVar;
+  CUdeviceptr FutexVar;
+  CUdeviceptr MemBufVar;
+  CUdeviceptr MemBufSizeVar;
+
+  if (!CheckGlobal(DescriptorVar, DescriptorVarName,
+                   sizeof(HostRPCDescriptor *))) {
+    REPORT("Loading global '%s' failed\n", DescriptorVarName);
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+  if (!CheckGlobal(FutexVar, FutexVarName, sizeof(uint32_t *))) {
+    REPORT("Loading global '%s' failed\n", FutexVarName);
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+  if (!CheckGlobal(MemBufVar, MemBufVarName, sizeof(char *))) {
+    REPORT("Loading global '%s' failed\n", MemBufVarName);
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+  if (!CheckGlobal(MemBufSizeVar, MemBufSizeVarName, sizeof(size_t))) {
+    REPORT("Loading global '%s' failed\n", MemBufSizeVarName);
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemAllocManaged(&Descriptor, sizeof(HostRPCDescriptor),
+                          CU_MEM_ATTACH_GLOBAL);
+  if (Err != CUDA_SUCCESS) {
+    DP("Failed to allocate USM for descriptor.\n");
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemAllocManaged(&Futex, sizeof(uint32_t), CU_MEM_ATTACH_GLOBAL);
+  if (Err != CUDA_SUCCESS) {
+    DP("Failed to allocate USM for futex.\n");
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  *reinterpret_cast<uint32_t *>(Futex) = 0;
+
+  CUdeviceptr MemBuf;
+  // 1GB
+  const size_t Size = 1073741824;
+  Err = cuMemAllocManaged(&MemBuf, Size, CU_MEM_ATTACH_GLOBAL);
+  if (Err != CUDA_SUCCESS) {
+    REPORT("Failed to allocate USM for host rpc buffer\n");
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemcpyHtoD(DescriptorVar, &Descriptor, sizeof(HostRPCDescriptor *));
+  if (Err != CUDA_SUCCESS) {
+    REPORT("Failed to set %s to " DPxMOD ".\n", DescriptorVarName,
+           DPxPTR(Descriptor));
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemcpyHtoD(FutexVar, &Futex, sizeof(uint32_t *));
+  if (Err != CUDA_SUCCESS) {
+    REPORT("Failed to set %s to " DPxMOD ".\n", FutexVarName, DPxPTR(Futex));
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemcpyHtoD(MemBufVar, &MemBuf, sizeof(uint32_t *));
+  if (Err != CUDA_SUCCESS) {
+    REPORT("Failed to set %s to " DPxMOD ".\n", MemBufVarName, DPxPTR(MemBuf));
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  Err = cuMemcpyHtoD(MemBufSizeVar, &Size, sizeof(size_t));
+  if (Err != CUDA_SUCCESS) {
+    REPORT("Failed to set %s to " DPxMOD ".\n", MemBufSizeVarName,
+           DPxPTR(MemBufSizeVar));
+    CUDA_ERR_STRING(Err);
+    return false;
+  }
+
+  return true;
+}
+
+void runHostRPCServer(CUmodule Module, CUcontext Context,
+                      CUdeviceptr DescriptorPtr, CUdeviceptr FutexPtr,
+                      ManagedMemoryAllocator *MMA) {
+  CUresult Err = cuCtxSetCurrent(Context);
+  if (!checkResult(Err, "error returned from cuCtxSetCurrent"))
+    return;
+
+  HostRPCDescriptor Descriptor;
+  CUdeviceptr DescriptorAddr;
+  HostRPCDescriptor *NullPtr = nullptr;
+
+  while (IsHostRPCEnabled) {
+    uint32_t F = *reinterpret_cast<uint32_t *>(FutexPtr);
+
+    if (F == 0) {
+      std::this_thread::sleep_for(20ms);
+      continue;
+    }
+
+    // Get the descriptor.
+    Descriptor = *reinterpret_cast<HostRPCDescriptor *>(DescriptorPtr);
+
+    bool HandleResult = false;
+    switch (Descriptor.Id) {
+#define SYSCALL_CASE(ID)                                                       \
+  case SYSCALLID_##ID:                                                         \
+    HandleResult = handle_##ID(Descriptor, *MMA);                              \
+    break;
+
+      SYSCALL_CASE(fopen)
+      SYSCALL_CASE(fread)
+      SYSCALL_CASE(stat)
+      SYSCALL_CASE(popen)
+      SYSCALL_CASE(fwrite)
+      SYSCALL_CASE(fclose)
+      SYSCALL_CASE(getc)
+      SYSCALL_CASE(pclose)
+      SYSCALL_CASE(fflush)
+      SYSCALL_CASE(rewind)
+      SYSCALL_CASE(fseek)
+      SYSCALL_CASE(ftell)
+      SYSCALL_CASE(feof)
+      SYSCALL_CASE(gettimeofday)
+      SYSCALL_CASE(fgets)
+      SYSCALL_CASE(strftime)
+      SYSCALL_CASE(gmtime)
+
+#undef SYSCALL_CASE
+    default:
+      assert(0 && "unknown syscall id");
+    }
+
+    Descriptor.Status = EXEC_STAT_DONE;
+    if (!HandleResult)
+      Descriptor.ReturnValue = nullptr;
+
+    // Update the descriptor and futex word on the device.
+    *reinterpret_cast<HostRPCDescriptor *>(DescriptorPtr) = Descriptor;
+    *reinterpret_cast<uint32_t *>(FutexPtr) = 0;
+  }
 }
 
 int memcpyDtoD(const void *SrcPtr, void *DstPtr, int64_t Size,
@@ -363,6 +925,9 @@ class DeviceRTLTy {
   std::vector<std::vector<PeerAccessState>> PeerAccessMatrix;
   std::mutex PeerAccessMatrixLock;
 
+  std::vector<std::vector<std::thread>> HostRPCServers;
+  std::vector<std::vector<int>> HostRPCInitState;
+
   /// A class responsible for interacting with device native runtime library to
   /// allocate and free memory.
   class CUDADeviceAllocatorTy : public DeviceAllocatorTy {
@@ -532,6 +1097,8 @@ public:
     Modules.resize(NumberOfDevices);
     StreamPool.resize(NumberOfDevices);
     EventPool.resize(NumberOfDevices);
+    HostRPCServers.resize(NumberOfDevices);
+    HostRPCInitState.resize(NumberOfDevices);
     PeerAccessMatrix.resize(NumberOfDevices);
     for (auto &V : PeerAccessMatrix)
       V.resize(NumberOfDevices, PeerAccessState::Unkown);
@@ -768,6 +1335,11 @@ public:
   }
 
   int deinitDevice(const int DeviceId) {
+    IsHostRPCEnabled = false;
+
+    for (auto &T : HostRPCServers[DeviceId])
+      T.join();
+
     auto IsInitialized = InitializedFlags[DeviceId];
     if (!IsInitialized)
       return OFFLOAD_SUCCESS;
@@ -1047,6 +1619,24 @@ public:
            "allocation.\n");
       }
     }
+
+    // Start the host RPC thread
+    IsHostRPCEnabled = true;
+
+    CUdeviceptr DescriptorPtr;
+    CUdeviceptr FutexPtr;
+    if (!initHostRPCServer(Module, DeviceData[DeviceId].Context, DescriptorPtr,
+                           FutexPtr)) {
+      REPORT("Failed to init host RPC server\n");
+      return nullptr;
+    }
+
+    // FIXME: WA
+    ManagedMemoryAllocator *MMA = new ManagedMemoryAllocator(1073741824);
+
+    HostRPCServers[DeviceId].emplace_back(
+        runHostRPCServer, Module, DeviceData[DeviceId].Context, DescriptorPtr,
+        FutexPtr, MMA);
 
     return getOffloadEntriesTable(DeviceId);
   }

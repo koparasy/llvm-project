@@ -12,7 +12,9 @@
 #pragma omp begin declare target device_type(nohost)
 
 #include "Memory.h"
+#include "Debug.h"
 #include "Synchronization.h"
+#include "Utils.h"
 
 using namespace _OMP;
 
@@ -25,18 +27,27 @@ size_t CONSTANT(omptarget_device_heap_size)
 namespace {
 size_t HeapCurPos = 0;
 mutex::TicketLock HeapLock;
+constexpr const size_t Alignment = 16;
 }
 
 extern "C" {
 
 void *malloc(size_t Size) {
-  mutex::LockGaurd LG(HeapLock);
+  Size = utils::align_up(Size, Alignment);
+
+  mutex::LockGuard LG(HeapLock);
 
   if (Size + HeapCurPos < omptarget_device_heap_size) {
     void *R = omptarget_device_heap_buffer + HeapCurPos;
-    atomic::add(&HeapCurPos, Size, __ATOMIC_SEQ_CST);
+    size_t Old = atomic::add(&HeapCurPos, Size, __ATOMIC_SEQ_CST);
+    printf("malloc returns %p, old=%lu, new=%lu.\n", R, Old,
+           atomic::load(&HeapCurPos, __ATOMIC_SEQ_CST));
     return R;
   }
+
+  printf("out of heap memory! size=%lu, cur=%lu.\n", Size, HeapCurPos);
+
+  __builtin_trap();
 
   return nullptr;
 }
