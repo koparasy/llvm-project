@@ -1455,6 +1455,24 @@ public:
   /// \param IsSPMD Flag to indicate if the kernel is an SPMD kernel or not.
   void createTargetDeinit(const LocationDescription &Loc, bool IsSPMD);
 
+  struct TargetReductionValueInfo {
+    Value *Priv;
+    Value *LHS;
+    Value *RHS;
+    omp::target::reduction::Operation Op;
+    omp::target::reduction::ElementType ElementTy;
+    uint32_t ItemSize;
+    uint32_t NumItems;
+  };
+
+  /// TODO
+  void createTargetReduction(
+    const LocationDescription &Loc, 
+    InsertPointTy AllocaIP,
+    ArrayRef<TargetReductionValueInfo> TRVI,
+omp::target::reduction::Level Level,
+    bool Nowait);
+
   ///}
 
 private:
