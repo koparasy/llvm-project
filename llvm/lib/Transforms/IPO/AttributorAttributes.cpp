@@ -1114,10 +1114,10 @@ struct AAPointerInfoImpl
     // hide the effect of this one.
     auto CanSkipAccess = [&](const Access &Acc, bool Exact) {
       if ((!Acc.isWriteOrAssumption() ||
-           !AA::isPotentiallyReachable(A, *Acc.getLocalInst(), I, QueryingAA,
+           !AA::isPotentiallyReachable(A, *Acc.getRemoteInst(), I, QueryingAA,
                                        &ExclusionSet, IsLiveInCalleeCB)) &&
           (!Acc.isRead() || !AA::isPotentiallyReachable(
-                                A, I, *Acc.getLocalInst(), QueryingAA,
+                                A, I, *Acc.getRemoteInst(), QueryingAA,
                                 /* ExclusionSet */ nullptr, IsLiveInCalleeCB)))
         return true;
 
@@ -10332,9 +10332,10 @@ struct AAPotentialValuesFloating : AAPotentialValuesImpl {
       return false;
     }
 
-    // Do not simplify loads that are only used in llvm.assume if we cannot also
-    // remove all stores that may feed into the load. The reason is that the
-    // assume is probably worth something as long as the stores are around.
+// Do not simplify loads that are only used in llvm.assume if we cannot also
+// remove all stores that may feed into the load. The reason is that the
+// assume is probably worth something as long as the stores are around.
+#if 1
     InformationCache &InfoCache = A.getInfoCache();
     if (InfoCache.isOnlyUsedByAssume(LI)) {
       if (!llvm::all_of(PotentialValueOrigins, [&](Instruction *I) {
@@ -10355,6 +10356,7 @@ struct AAPotentialValuesFloating : AAPotentialValuesImpl {
         return false;
       }
     }
+#endif
 
     // Values have to be dynamically unique or we loose the fact that a
     // single llvm::Value might represent two runtime values (e.g.,
