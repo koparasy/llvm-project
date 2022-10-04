@@ -576,6 +576,7 @@ define internal void @t4c(ptr %this, ptr %data) {
 ; TUNIT-NEXT:  entry:
 ; TUNIT-NEXT:    [[THIS_ADDR:%.*]] = alloca ptr, i32 0, align 8
 ; TUNIT-NEXT:    [[DATA_ADDR:%.*]] = alloca ptr, i32 0, align 8
+; TUNIT-NEXT:    [[DATA_:%.*]] = getelementptr inbounds [[S:%.*]], ptr undef, i32 0, i32 0
 ; TUNIT-NEXT:    ret void
 ;
 ; CGSCC: Function Attrs: nofree norecurse nosync nounwind willreturn memory(argmem: write)
