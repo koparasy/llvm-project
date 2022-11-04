@@ -3299,8 +3299,9 @@ struct AAIntraFnReachabilityFunction final
 
     RQITy StackRQI(A, From, To, ExclusionSet);
     typename RQITy::Reachable Result;
-    if (RQITy *RQIPtr = NonConstThis->checkQueryCache(A, StackRQI, Result))
+    if (RQITy *RQIPtr = NonConstThis->checkQueryCache(A, StackRQI, Result)) {
       return NonConstThis->isReachableImpl(A, *RQIPtr);
+}
     return Result == RQITy::Reachable::Yes;
   }
 
@@ -3324,6 +3325,11 @@ struct AAIntraFnReachabilityFunction final
         WillReachInBlock(*RQI.From, *RQI.To, RQI.ExclusionSet))
       return rememberResult(A, RQITy::Reachable::Yes, RQI);
 
+    SmallPtrSet<const BasicBlock *, 16> ExclusionBlocks;
+    if (RQI.ExclusionSet)
+      for (auto *I : *RQI.ExclusionSet)
+        ExclusionBlocks.insert(I->getParent());
+
     SmallPtrSet<const BasicBlock *, 16> Visited;
     SmallVector<const BasicBlock *, 16> Worklist;
     Worklist.push_back(FromBB);
@@ -3340,6 +3346,8 @@ struct AAIntraFnReachabilityFunction final
         if (SuccBB == ToBB &&
             WillReachInBlock(SuccBB->front(), *RQI.To, RQI.ExclusionSet))
           return rememberResult(A, RQITy::Reachable::Yes, RQI);
+        if (ExclusionBlocks.count(SuccBB))
+          continue;
         Worklist.push_back(SuccBB);
       }
     }

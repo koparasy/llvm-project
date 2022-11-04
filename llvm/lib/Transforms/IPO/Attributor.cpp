@@ -570,11 +570,16 @@ isPotentiallyReachable(Attributor &A, const Instruction &FromI,
                        const AbstractAttribute &QueryingAA,
                        const AA::InstExclusionSetTy *ExclusionSet,
                        std::function<bool(const Function &F)> GoBackwardsCB) {
-  LLVM_DEBUG(
+  LLVM_DEBUG( {
       dbgs() << "[AA] isPotentiallyReachable @" << ToFn.getName() << " from "
              << FromI << " [GBCB: " << bool(GoBackwardsCB) << "][#ExS: "
              << (ExclusionSet ? std::to_string(ExclusionSet->size()) : "none")
-             << "]\n");
+             << "]\n";
+  if (ExclusionSet)
+for (auto *ES : *ExclusionSet)
+dbgs() << *ES << "\n";
+});
+    
 
   // If we can go arbitrarily backwards we will eventually reach an entry point
   // that can reach ToI. Only if a set of blocks through which we cannot go is
