@@ -1076,6 +1076,9 @@ struct AAPointerInfoImpl
     AA::InstExclusionSetTy ExclusionSet;
 
     auto AccessCB = [&](const Access &Acc, bool Exact) {
+      if (Acc.isWriteOrAssumption())
+        ExclusionSet.insert(Acc.getRemoteInst());
+
       if ((!FindInterferingWrites || !Acc.isWriteOrAssumption()) &&
           (!FindInterferingReads || !Acc.isRead()))
         return true;
@@ -1084,7 +1087,6 @@ struct AAPointerInfoImpl
                        (Acc.getLocalInst()->getFunction() == &Scope) &&
                        DT->dominates(Acc.getRemoteInst(), &I);
       if (FindInterferingWrites) {
-        ExclusionSet.insert(Acc.getRemoteInst());
         if (Exact)
           ExactWrites.insert(Acc.getRemoteInst());
         if (Dominates)
