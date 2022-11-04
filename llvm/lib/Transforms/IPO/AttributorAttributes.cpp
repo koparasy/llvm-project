@@ -49,6 +49,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/ValueHandle.h"
@@ -3796,6 +3797,8 @@ struct AAIsDeadValueImpl : public AAIsDead {
     // Callers might not check the type, void has no uses.
     if (V.getType()->isVoidTy() || V.use_empty())
       return true;
+    if (isa<IntrinsicInst>(V) && cast<IntrinsicInst>(V).getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ntid_x)
+      return false;
 
     // If we replace a value with a constant there are no uses left afterwards.
     if (!isa<Constant>(V)) {
@@ -3803,22 +3806,23 @@ struct AAIsDeadValueImpl : public AAIsDead {
       if (I && !A.isRunOn(*I->getFunction()))
           return false;
       bool UsedAssumedInformation = false;
-      Optional<Value *> NewV =
-          A.getAssumedSimplified(V, *this, UsedAssumedInformation, AA::ValueScope::Intraprocedural);
-      if (!NewV || isa<Constant>(*NewV))
+      Optional<Constant *> C =
+          A.getAssumedConstant(V, *this, UsedAssumedInformation);
+      if (!C || *C)
         return true;
-      if (I) {
-        if (Value *CastedNewV = AA::getWithType(**NewV, *V.getType())) {
-          if (isa<Argument>(CastedNewV) && cast<Argument>(CastedNewV)->getParent() == I->getFunction())
-            return true;
-    	  InformationCache &InfoCache = A.getInfoCache();
-          const DominatorTree *DT =
-            InfoCache.getAnalysisResultForFunction<DominatorTreeAnalysis>(
-              *I->getFunction());
-          if (isa<Instruction>(CastedNewV) && DT && DT->dominates(cast<Instruction>(CastedNewV), I))
-	    return true;
+ #if 1
+      for (auto CS : {AA::Interprocedural, AA::Intraprocedural}) {
+      Optional<Value *> NewV =
+          A.getAssumedSimplified(V, *this, UsedAssumedInformation, CS);
+      if (!NewV)
+	return true;
+      if (I && *NewV && (*NewV)->getType() == V.getType() && isa<IntrinsicInst>(*NewV) && cast<IntrinsicInst>(*NewV)->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ntid_x) {
+	    if (AA::isValidAtPosition(AA::ValueAndContext(**NewV, *I),
+                                      A.getInfoCache()))
+        	    return true;
         }
       }
+#endif
     }
 
     auto UsePred = [&](const Use &U, bool &Follow) { return false; };
@@ -5779,10 +5783,13 @@ struct AAValueSimplifyImpl : AAValueSimplify {
                               Instruction &I, Type &Ty, Instruction *CtxI,
                               bool Check, ValueToValueMapTy &VMap) {
     assert(CtxI && "Cannot reproduce an instruction without context!");
-    if (Check && (I.mayReadFromMemory() ||
+    if (Check) {
+      if (!isa<IntrinsicInst>(I) || cast<IntrinsicInst>(I).getIntrinsicID() != Intrinsic::nvvm_read_ptx_sreg_ntid_x)
+         if (I.mayReadFromMemory() ||
                   !isSafeToSpeculativelyExecute(&I, CtxI, /* DT */ nullptr,
-                                                /* TLI */ nullptr)))
-      return nullptr;
+                                                /* TLI */ nullptr))
+           return nullptr;
+    }
     for (Value *Op : I.operands()) {
       Value *NewOp = reproduceValue(A, QueryingAA, *Op, Ty, CtxI, Check, VMap);
       if (!NewOp) {
@@ -5815,8 +5822,9 @@ struct AAValueSimplifyImpl : AAValueSimplify {
     if (const auto &NewV = VMap.lookup(&V))
       return NewV;
     bool UsedAssumedInformation = false;
+    for (auto CS : {AA::Interprocedural, AA::Intraprocedural}) {
     Optional<Value *> SimpleV = A.getAssumedSimplified(
-        V, QueryingAA, UsedAssumedInformation, AA::Interprocedural);
+        V, QueryingAA, UsedAssumedInformation, CS);
     if (!SimpleV.has_value())
       return PoisonValue::get(&Ty);
     Value *EffectiveV = &V;
@@ -5829,7 +5837,9 @@ struct AAValueSimplifyImpl : AAValueSimplify {
       return ensureType(A, *EffectiveV, Ty, CtxI, Check);
     if (auto *I = dyn_cast<Instruction>(EffectiveV))
       if (Value *NewV = reproduceInst(A, QueryingAA, *I, Ty, CtxI, Check, VMap))
-        return ensureType(A, *NewV, Ty, CtxI, Check);
+        if (Value *NewVTyped = ensureType(A, *NewV, Ty, CtxI, Check))
+	  return NewVTyped;
+    }
     return nullptr;
   }
 
