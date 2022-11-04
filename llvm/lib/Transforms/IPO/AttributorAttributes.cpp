@@ -1075,7 +1075,7 @@ struct AAPointerInfoImpl
     AA::InstExclusionSetTy ExclusionSet;
 
     auto AccessCB = [&](const Access &Acc, bool Exact) {
-      if (Acc.isWriteOrAssumption())
+      if (Exact && Acc.isWrite() && Acc.isMustAccess() && Acc.getRemoteInst() != &I)
         ExclusionSet.insert(Acc.getRemoteInst());
 
       if ((!FindInterferingWrites || !Acc.isWriteOrAssumption()) &&
@@ -1120,7 +1120,7 @@ struct AAPointerInfoImpl
                                        &ExclusionSet, IsLiveInCalleeCB)) &&
           (!Acc.isRead() || !AA::isPotentiallyReachable(
                                 A, I, *Acc.getRemoteInst(), QueryingAA,
-                                /* ExclusionSet */ nullptr, IsLiveInCalleeCB)))
+                                &ExclusionSet, IsLiveInCalleeCB)))
         return true;
 
       if (!DT || !UseDominanceReasoning)
@@ -3799,14 +3799,26 @@ struct AAIsDeadValueImpl : public AAIsDead {
 
     // If we replace a value with a constant there are no uses left afterwards.
     if (!isa<Constant>(V)) {
-      if (auto *I = dyn_cast<Instruction>(&V))
-        if (!A.isRunOn(*I->getFunction()))
+      auto *I = dyn_cast<Instruction>(&V);
+      if (I && !A.isRunOn(*I->getFunction()))
           return false;
       bool UsedAssumedInformation = false;
-      Optional<Constant *> C =
-          A.getAssumedConstant(V, *this, UsedAssumedInformation);
-      if (!C || *C)
+      Optional<Value *> NewV =
+          A.getAssumedSimplified(V, *this, UsedAssumedInformation, AA::ValueScope::Intraprocedural);
+      if (!NewV || isa<Constant>(*NewV))
         return true;
+      if (I) {
+        if (Value *CastedNewV = AA::getWithType(**NewV, *V.getType())) {
+          if (isa<Argument>(CastedNewV) && cast<Argument>(CastedNewV)->getParent() == I->getFunction())
+            return true;
+    	  InformationCache &InfoCache = A.getInfoCache();
+          const DominatorTree *DT =
+            InfoCache.getAnalysisResultForFunction<DominatorTreeAnalysis>(
+              *I->getFunction());
+          if (isa<Instruction>(CastedNewV) && DT && DT->dominates(cast<Instruction>(CastedNewV), I))
+	    return true;
+        }
+      }
     }
 
     auto UsePred = [&](const Use &U, bool &Follow) { return false; };
