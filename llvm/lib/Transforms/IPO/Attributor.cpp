@@ -623,20 +623,21 @@ isPotentiallyReachable(Attributor &A, const Instruction &FromI,
     LLVM_DEBUG(dbgs() << "[AA] Entry " << EntryI << " of @" << ToFn.getName()
                       << " " << (Result ? "can potentially " : "cannot ")
                       << "reach @" << *ToI << " [ToFn]\n");
-    if (!Result)
-      return false;
+    if (Result) {
+      // The entry of the ToFn can reach the instruction ToI. If the current
+			// instruction is already known to reach the ToFn.
+			const auto &FnReachabilityAA = A.getAAFor<AAInterFnReachability>(
+					QueryingAA, IRPosition::function(*FromFn), DepClassTy::OPTIONAL);
+			Result =
+					FnReachabilityAA.instructionCanReach(A, *CurFromI, ToFn, ExclusionSet);
+			LLVM_DEBUG(dbgs() << "[AA] " << *CurFromI << " in @" << FromFn->getName()
+												<< " " << (Result ? "can potentially " : "cannot ")
+												<< "reach @" << ToFn.getName() << " [FromFn]\n");
+			if (Result)
+				return true;
+    }
 
-    // Check if the current instruction is already known to reach the ToFn.
-    const auto &FnReachabilityAA = A.getAAFor<AAInterFnReachability>(
-        QueryingAA, IRPosition::function(*FromFn), DepClassTy::OPTIONAL);
-    Result =
-        FnReachabilityAA.instructionCanReach(A, *CurFromI, ToFn, ExclusionSet);
-    LLVM_DEBUG(dbgs() << "[AA] " << *CurFromI << " in @" << FromFn->getName()
-                      << " " << (Result ? "can potentially " : "cannot ")
-                      << "reach @" << ToFn.getName() << " [FromFn]\n");
-    if (Result)
-      return true;
-
+		// TODO: Check assumed nounwind.
     const auto &ReachabilityAA = A.getAAFor<AAIntraFnReachability>(
         QueryingAA, IRPosition::function(*FromFn), DepClassTy::OPTIONAL);
     auto ReturnInstCB = [&](Instruction &Ret) {
