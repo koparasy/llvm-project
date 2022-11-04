@@ -1859,14 +1859,16 @@ reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config) {
   // TODO: This is not setup yet.
   Ty *TypedTODO = reinterpret_cast<Ty *>(TODO);
   Ty *TypedBuffer = reinterpret_cast<Ty *>(Config.__buffer);
-  Ty *TypedIntermeditePtr =
-      UseLargeBuffer ? (NumItems == 1 ? TypedTODO : TypedBuffer) : TypedSrcPtr;
+  Ty *TypedIntermeditePtr = TypedSrcPtr;
+     // UseLargeBuffer ? (NumItems == 1 ? TypedTODO : TypedBuffer) : TypedSrcPtr;
 
+#if 0
   reduceTeamImpl<Ty, IntTy>(TypedIntermeditePtr, TypedSrcPtr, BatchSize,
                             Config.__op, Config.__reducer_fn,
                             Config.__element_type, NumItems, NumParticipants,
                             /* ReduceInto */ false,
                             /* Atomically */ false, ReduceWarpsFirst);
+#endif
 
   if (UseProcessorIdx) {
 
