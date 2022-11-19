@@ -2767,74 +2767,71 @@ struct AAExecutionDomainFunction : public AAExecutionDomain {
   AAExecutionDomainFunction(const IRPosition &IRP, Attributor &A)
       : AAExecutionDomain(IRP, A) {}
 
-  const std::string getAsStr() const override {
-    return "[AAExecutionDomain] " + std::to_string(SingleThreadedBBs.size()) +
-           "/" + std::to_string(NumBBs) + " BBs thread 0 only.";
-  }
+  const std::string getAsStr() const override { return "[AAExecutionDomain] "; }
 
   /// See AbstractAttribute::trackStatistics().
   void trackStatistics() const override {}
 
   void initialize(Attributor &A) override {
     Function *F = getAnchorScope();
-    for (const auto &BB : *F)
-      SingleThreadedBBs.insert(&BB);
-    NumBBs = SingleThreadedBBs.size();
+    auto &OMPInfoCache = static_cast<OMPInformationCache &>(A.getInfoCache());
+    if (!OMPInfoCache.Kernels.count(F))
+      return;
+    ExecutionDomainTy &EntryED = BEDMap[&F->getEntryBlock()];
+    EntryED.IsExecutedByInitialThreadOnly = false;
+    EntryED.IsReachedFromAlignedBarrierOnly = true;
+    EntryED.EncounteredNonLocalSideEffect = false;
   }
 
   ChangeStatus manifest(Attributor &A) override {
-    LLVM_DEBUG({
-      for (const BasicBlock *BB : SingleThreadedBBs)
-        dbgs() << TAG << " Basic block @" << getAnchorScope()->getName() << " "
-               << BB->getName() << " is executed by a single thread.\n";
-    });
+    getAnchorScope()->dump();
+    auto HandleAlignedBarrier = [&](const CallBase *CB) {
+      const ExecutionDomainTy &ED = CEDMap[CB];
+      dbgs() << "Init  T: " << ED.IsExecutedByInitialThreadOnly << "\n";
+      dbgs() << "Reached: " << ED.IsReachedFromAlignedBarrierOnly << "\n";
+      dbgs() << "Reacing: " << ED.IsReachingAlignedBarrierOnly << "\n";
+      dbgs() << "NLSideE: " << ED.EncounteredNonLocalSideEffect << "\n";
+      dbgs() << "     AB: "
+             << (ED.AlignedBarriers ? ED.AlignedBarriers->size() : 0) << "\n";
+      dbgs() << "     EA: "
+             << (ED.EncounteredAssumes ? ED.EncounteredAssumes->size() : 0)
+             << "\n";
+    };
+
+    for (auto *CB : AlignedBarriers) {
+      CB->dump();
+      HandleAlignedBarrier(CB);
+    }
+    errs() << "Kernel End barrier\n";
+    HandleAlignedBarrier(nullptr);
     return ChangeStatus::UNCHANGED;
   }
 
   ChangeStatus updateImpl(Attributor &A) override;
 
-  /// Check if an instruction is executed by a single thread.
-  bool isExecutedByInitialThreadOnly(const Instruction &I) const override {
-    return isExecutedByInitialThreadOnly(*I.getParent());
-  }
-
   bool isExecutedByInitialThreadOnly(const BasicBlock &BB) const override {
-    return isValidState() && SingleThreadedBBs.contains(&BB);
+    if (!isValidState())
+      return false;
+    return BEDMap.lookup(&BB).IsExecutedByInitialThreadOnly;
   }
 
-  /// Set of basic blocks that are executed by a single thread.
-  SmallSetVector<const BasicBlock *, 16> SingleThreadedBBs;
-
-  /// Total number of basic blocks in this function.
-  long unsigned NumBBs = 0;
-};
-
-ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
-  Function *F = getAnchorScope();
-  ReversePostOrderTraversal<Function *> RPOT(F);
-  auto NumSingleThreadedBBs = SingleThreadedBBs.size();
-
-  bool AllCallSitesKnown;
-  auto PredForCallSite = [&](AbstractCallSite ACS) {
-    const auto &ExecutionDomainAA = A.getAAFor<AAExecutionDomain>(
-        *this, IRPosition::function(*ACS.getInstruction()->getFunction()),
-        DepClassTy::REQUIRED);
-    return ACS.isDirectCall() &&
-           ExecutionDomainAA.isExecutedByInitialThreadOnly(
-               *ACS.getInstruction());
-  };
-
-  if (!A.checkForAllCallSites(PredForCallSite, *this,
-                              /* RequiresAllCallSites */ true,
-                              AllCallSitesKnown))
-    SingleThreadedBBs.remove(&F->getEntryBlock());
-
-  auto &OMPInfoCache = static_cast<OMPInformationCache &>(A.getInfoCache());
-  auto &RFI = OMPInfoCache.RFIs[OMPRTL___kmpc_target_init];
+  ExecutionDomainTy getExecutionDomain(const BasicBlock &BB) const override {
+    assert(isValidState());
+    return BEDMap.lookup(&BB);
+  }
+  ExecutionDomainTy getExecutionDomain(const CallBase &CB) const override {
+    assert(isValidState());
+    return CEDMap.lookup(&CB);
+  }
+  ExecutionDomainTy getFunctionExecutionDomain() const override {
+    assert(isValidState());
+    return BEDMap.lookup(nullptr);
+  }
 
   // Check if the edge into the successor block contains a condition that only
   // lets the main thread execute it.
-  auto IsInitialThreadOnly = [&](BranchInst *Edge, BasicBlock *SuccessorBB) {
+  bool isInitialThreadOnly(Attributor &A, BranchInst *Edge,
+                           BasicBlock *SuccessorBB) {
     if (!Edge || !Edge->isConditional())
       return false;
     if (Edge->getSuccessor(0) != SuccessorBB)
@@ -2851,6 +2848,8 @@ ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
     // Match: -1 == __kmpc_target_init (for non-SPMD kernels only!)
     if (C->isAllOnesValue()) {
       auto *CB = dyn_cast<CallBase>(Cmp->getOperand(0));
+      auto &OMPInfoCache = static_cast<OMPInformationCache &>(A.getInfoCache());
+      auto &RFI = OMPInfoCache.RFIs[OMPRTL___kmpc_target_init];
       CB = CB ? OpenMPOpt::getCallIfRegularCall(*CB, &RFI) : nullptr;
       if (!CB)
         return false;
@@ -2874,30 +2873,396 @@ ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
     return false;
   };
 
-  // Merge all the predecessor states into the current basic block. A basic
-  // block is executed by a single thread if all of its predecessors are.
-  auto MergePredecessorStates = [&](BasicBlock *BB) {
-    if (pred_empty(BB))
-      return SingleThreadedBBs.contains(BB);
+  /// Mapping containing information per block.
+  DenseMap<const BasicBlock *, ExecutionDomainTy> BEDMap;
+  DenseMap<const CallBase *, ExecutionDomainTy> CEDMap;
+  SmallSetVector<const CallBase *, 16> AlignedBarriers;
+};
 
-    bool IsInitialThread = true;
-    for (BasicBlock *PredBB : predecessors(BB)) {
-      if (!IsInitialThreadOnly(dyn_cast<BranchInst>(PredBB->getTerminator()),
-                               BB))
-        IsInitialThread &= SingleThreadedBBs.contains(PredBB);
-    }
+static void dumpED(StringRef S,
+                   const AAExecutionDomainFunction::ExecutionDomainTy &ED,
+                   bool Changed) {
+  dbgs() << "-------- " << S << " :: " << Changed << "\n";
+  dbgs() << "Init  T: " << ED.IsExecutedByInitialThreadOnly << "\n";
+  dbgs() << "Reached: " << ED.IsReachedFromAlignedBarrierOnly << "\n";
+  dbgs() << "Reacing: " << ED.IsReachingAlignedBarrierOnly << "\n";
+  dbgs() << "NLSideE: " << ED.EncounteredNonLocalSideEffect << "\n";
+  dbgs() << "     AB: " << (ED.AlignedBarriers ? ED.AlignedBarriers->size() : 0)
+         << "\n";
+  dbgs() << "     EA: "
+         << (ED.EncounteredAssumes ? ED.EncounteredAssumes->size() : 0) << "\n";
+}
+static bool neqED(const AAExecutionDomainFunction::ExecutionDomainTy &LHS,
+                  const AAExecutionDomainFunction::ExecutionDomainTy &RHS) {
+  if (LHS.IsExecutedByInitialThreadOnly != RHS.IsExecutedByInitialThreadOnly ||
+      LHS.IsReachedFromAlignedBarrierOnly !=
+          RHS.IsReachedFromAlignedBarrierOnly ||
+      LHS.IsReachingAlignedBarrierOnly != RHS.IsReachingAlignedBarrierOnly ||
+      LHS.EncounteredNonLocalSideEffect != RHS.EncounteredNonLocalSideEffect)
+    return true;
+#if 0
+   if (LHS.AlignedBarriers != RHS.AlignedBarriers) {
+     if (!LHS.AlignedBarriers || !RHS.AlignedBarriers)
+	return true;
+     if (LHS.AlignedBarriers->size() != RHS.AlignedBarriers->size())
+	return true;
+   }
+   if (LHS.EncounteredAssumes != RHS.EncounteredAssumes) {
+     if (!LHS.EncounteredAssumes || !RHS.EncounteredAssumes)
+	return true;
+     if (LHS.EncounteredAssumes->size() != RHS.EncounteredAssumes->size())
+	return true;
+   }
+#endif
+  return false;
+}
 
-    return IsInitialThread;
+ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
+  Function *F = getAnchorScope();
+  errs() << "Update Impl " << F->getName() << "\n";
+
+  bool AllCallSitesKnown;
+  SmallVector<ExecutionDomainTy> PredExecDomains;
+
+  auto SetAndRecord = [](bool &R, bool V) {
+    if (R == V)
+      return false;
+    R = V;
+    return true;
   };
 
-  for (auto *BB : RPOT) {
-    if (!MergePredecessorStates(BB))
-      SingleThreadedBBs.remove(BB);
+  auto MergeInPredecessor = [&](ExecutionDomainTy &ED,
+                                const ExecutionDomainTy &PredED,
+                                bool InitialEdgeOnly, bool &Changed) {
+    SetAndRecord(ED.IsExecutedByInitialThreadOnly,
+                 InitialEdgeOnly || (PredED.IsExecutedByInitialThreadOnly &
+                                     ED.IsExecutedByInitialThreadOnly));
+
+    SetAndRecord(ED.IsReachedFromAlignedBarrierOnly,
+                 ED.IsReachedFromAlignedBarrierOnly &
+                     PredED.IsReachedFromAlignedBarrierOnly);
+    SetAndRecord(ED.EncounteredNonLocalSideEffect,
+                 ED.EncounteredNonLocalSideEffect |
+                     PredED.EncounteredNonLocalSideEffect);
+
+    if (PredED.EncounteredAssumes && !PredED.EncounteredAssumes->empty()) {
+      if (!ED.EncounteredAssumes)
+        ED.EncounteredAssumes = new (A.Allocator)
+            std::remove_reference<decltype(*ED.EncounteredAssumes)>::type;
+      //auto S = ED.EncounteredAssumes->size();
+      ED.EncounteredAssumes->insert(PredED.EncounteredAssumes->begin(),
+                                    PredED.EncounteredAssumes->end());
+      //Changed |= S != ED.EncounteredAssumes->size();
+    }
+
+    if (PredED.AlignedBarriers) {
+      if (!ED.AlignedBarriers)
+        ED.AlignedBarriers = new (A.Allocator)
+            std::remove_reference<decltype(*ED.AlignedBarriers)>::type;
+      //auto S = ED.AlignedBarriers->size();
+      ED.AlignedBarriers->insert(PredED.AlignedBarriers->begin(),
+                                 PredED.AlignedBarriers->end());
+      //Changed |= S != ED.AlignedBarriers->size();
+    }
+  };
+
+  auto AddAssumeInst = [&](ExecutionDomainTy &ED, AssumeInst &AI,
+                           bool &Changed) {
+    if (!ED.EncounteredAssumes)
+      ED.EncounteredAssumes = new (A.Allocator)
+          std::remove_reference<decltype(*ED.EncounteredAssumes)>::type;
+    ED.EncounteredAssumes->insert(&AI);
+  };
+
+  auto IsPotentiallyAffectedByBarrier = [&](Optional<MemoryLocation> Loc,
+                                            Instruction &CtxI) {
+    if (!Loc || !Loc->Ptr) {
+      LLVM_DEBUG(dbgs() << "Access to unknown location requires barriers\n");
+      return true;
+    }
+    SmallSetVector<Value *, 8> Objects;
+    bool UsedAssumedInformation = false;
+    if (!AA::getAssumedUnderlyingObjects(A, *Loc->Ptr, Objects, *this, &CtxI,
+                                         UsedAssumedInformation,
+                                         AA::Intraprocedural)) {
+      LLVM_DEBUG(
+          dbgs() << "Failed to aquire underlying objects, requires barriers\n");
+      return true;
+    }
+    for (Value *Obj : Objects) {
+      if (isa<UndefValue>(Obj))
+        continue;
+      if (isa<AllocaInst>(Obj))
+        continue;
+      if (auto *GV = dyn_cast<GlobalVariable>(Obj)) {
+        if (GV->isConstant())
+          continue;
+        if (GV->isThreadLocal())
+          continue;
+        if (GV->getAddressSpace() == (int)AddressSpace::Local)
+          continue;
+        if (GV->getAddressSpace() == (int)AddressSpace::Constant)
+          continue;
+      }
+      LLVM_DEBUG(dbgs() << "Access to '" << *Obj << "' requires barriers\n");
+      return true;
+    }
+    return false;
+  };
+
+  auto IsAlignBarrierCB = [&](CallBase &CB) {
+    switch (CB.getIntrinsicID()) {
+    case Intrinsic::nvvm_barrier0:
+    case Intrinsic::nvvm_barrier0_and:
+    case Intrinsic::nvvm_barrier0_or:
+    case Intrinsic::nvvm_barrier0_popc:
+      return true;
+    default:
+      break;
+    }
+    return hasAssumption(CB, KnownAssumptionString("ompx_aligned_barrier"));
+  };
+
+  auto PredForCallSite = [&](AbstractCallSite ACS) {
+    const auto &EDAA = A.getAAFor<AAExecutionDomain>(
+        *this, IRPosition::function(*ACS.getInstruction()->getFunction()),
+        DepClassTy::OPTIONAL);
+    if (!EDAA.getState().isValidState())
+      return false;
+    PredExecDomains.push_back(
+        EDAA.getExecutionDomain(*cast<CallBase>(ACS.getInstruction())));
+    return true;
+  };
+
+  bool Changed = false;
+  auto &OMPInfoCache = static_cast<OMPInformationCache &>(A.getInfoCache());
+  BasicBlock &EntryBB = F->getEntryBlock();
+
+  {
+    ExecutionDomainTy &EntryED = BEDMap[&EntryBB];
+    ExecutionDomainTy InitialED = EntryED;
+
+    if (!A.checkForAllCallSites(PredForCallSite, *this,
+                                /* RequiresAllCallSites */ true,
+                                AllCallSitesKnown)) {
+      AllCallSitesKnown = false;
+      if (!OMPInfoCache.Kernels.count(F)) {
+        SetAndRecord(EntryED.IsExecutedByInitialThreadOnly, false);
+        SetAndRecord(EntryED.IsReachedFromAlignedBarrierOnly, false);
+        SetAndRecord(EntryED.EncounteredNonLocalSideEffect, true);
+      }
+    } else {
+      for (const auto &PredED : PredExecDomains)
+        MergeInPredecessor(EntryED, PredED, false, Changed);
+    }
+
+    dumpED("InitialED", InitialED, Changed);
+    Changed |= neqED(EntryED, InitialED);
+    dumpED("EntryED", EntryED, Changed);
   }
 
-  return (NumSingleThreadedBBs == SingleThreadedBBs.size())
-             ? ChangeStatus::UNCHANGED
-             : ChangeStatus::CHANGED;
+  auto HandleAlignedBarrier = [&](CallBase *CB, ExecutionDomainTy &ED) {
+    auto &CallED = CEDMap[CB];
+    MergeInPredecessor(CallED, ED, false, Changed);
+    if (ED.EncounteredAssumes)
+      ED.EncounteredAssumes->clear();
+    if (!ED.AlignedBarriers)
+      ED.AlignedBarriers = new (A.Allocator)
+          std::remove_reference<decltype(*ED.AlignedBarriers)>::type;
+    ED.AlignedBarriers->insert(CB);
+    SetAndRecord(ED.EncounteredNonLocalSideEffect, false);
+    SetAndRecord(ED.IsReachedFromAlignedBarrierOnly, true);
+  };
+
+  auto &LivenessAA =
+      A.getAAFor<AAIsDead>(*this, getIRPosition(), DepClassTy::OPTIONAL);
+
+  SmallVector<BasicBlock *> Worklist;
+  SmallSetVector<BasicBlock *, 16> Visited;
+  Worklist.push_back(&EntryBB);
+
+  SmallVector<Instruction *> SyncInstWorklist;
+  while (!Worklist.empty()) {
+    BasicBlock *BB = Worklist.pop_back_val();
+    if (!Visited.insert(BB))
+      continue;
+    if (!BB->hasName())
+      BB->setName("BB");
+
+    ExecutionDomainTy ED = BEDMap[BB];
+    ExecutionDomainTy InitialED = ED;
+    dumpED("ED", ED, Changed);
+
+    for (auto *PredBB : predecessors(BB)) {
+      if (LivenessAA.isEdgeDead(PredBB, BB))
+        continue;
+      bool InitialEdgeOnly = isInitialThreadOnly(
+          A, dyn_cast<BranchInst>(PredBB->getTerminator()), BB);
+      MergeInPredecessor(ED, BEDMap[PredBB], InitialEdgeOnly, Changed);
+      // dumpED("merged Pred into ED", ED, Changed);
+    }
+
+    for (Instruction &I : *BB) {
+      // dbgs() << "I: " << I << "\n";
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (auto *AI = dyn_cast_or_null<AssumeInst>(CB)) {
+        AddAssumeInst(ED, *AI, Changed);
+        continue;
+      }
+      // dbgs() << "I: " << I << "\n";
+
+      if (!AA::isNoSyncInst(A, I, *this)) {
+        if (CB && IsAlignBarrierCB(*CB)) {
+          Changed |= AlignedBarriers.insert(CB);
+          // TODO
+          HandleAlignedBarrier(CB, ED);
+        } else {
+          SetAndRecord(ED.IsReachedFromAlignedBarrierOnly, false);
+          SyncInstWorklist.push_back(&I);
+        }
+      }
+      // dbgs() << "I: " << I << "\n";
+
+      if (CB) {
+        if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(&I)) {
+          Optional<MemoryLocation> Loc = MemoryLocation::getForDest(MI);
+          if (!ED.EncounteredNonLocalSideEffect &&
+              IsPotentiallyAffectedByBarrier(Loc, I))
+            SetAndRecord(ED.EncounteredNonLocalSideEffect, true);
+          if (MemTransferInst *MTI = dyn_cast<MemTransferInst>(&I)) {
+            Optional<MemoryLocation> Loc = MemoryLocation::getForSource(MTI);
+            if (!ED.EncounteredNonLocalSideEffect &&
+                IsPotentiallyAffectedByBarrier(Loc, I))
+              SetAndRecord(ED.EncounteredNonLocalSideEffect, true);
+          }
+          continue;
+        }
+
+        auto &CallED = CEDMap[CB];
+        MergeInPredecessor(CallED, ED, false, Changed);
+        Function *Callee = CB->getCalledFunction();
+        // errs() << "Callee " << Callee << "\n";
+        //  TODO CAll handling
+        if (!Callee || Callee->isDeclaration()) {
+          if (SetAndRecord(CallED.IsReachingAlignedBarrierOnly, false))
+            SyncInstWorklist.push_back(&I);
+          // Side effects handled below.
+        } else {
+          const auto &EDAA = A.getAAFor<AAExecutionDomain>(
+              *this, IRPosition::function(*Callee), DepClassTy::OPTIONAL);
+          // dbgs() << "EDAA: " << static_cast<const AbstractAttribute&>(EDAA)
+          // << " :: " <<(!EDAA.getState().isValidState()) <<"\n";
+          if (!EDAA.getState().isValidState()) {
+            if (SetAndRecord(CallED.IsReachingAlignedBarrierOnly, false))
+              SyncInstWorklist.push_back(&I);
+            // dumpED("-- CallED", CallED, Changed);
+          } else {
+            const auto &CalleeED = EDAA.getFunctionExecutionDomain();
+            // dumpED("-- CalleeED", CalleeED, Changed);
+            if (CallED.IsReachingAlignedBarrierOnly)
+              SetAndRecord(CallED.IsReachingAlignedBarrierOnly,
+                           CalleeED.IsReachingAlignedBarrierOnly);
+            if (!CallED.IsReachingAlignedBarrierOnly)
+              SyncInstWorklist.push_back(&I);
+            // dumpED("-- CallED", CallED, Changed);
+            MergeInPredecessor(ED, CalleeED, false, Changed);
+            // dumpED("-- new ED", ED, Changed);
+            continue;
+          }
+        }
+        // dbgs() << "I after callee check: " << I << "\n";
+        if (!I.mayHaveSideEffects() && !I.mayReadFromMemory())
+          continue;
+
+        if (auto *LI = dyn_cast<LoadInst>(&I))
+          if (LI->hasMetadata(LLVMContext::MD_invariant_load))
+            continue;
+
+        Optional<MemoryLocation> Loc = MemoryLocation::getOrNone(&I);
+        if (!ED.EncounteredNonLocalSideEffect &&
+            IsPotentiallyAffectedByBarrier(Loc, I))
+          SetAndRecord(ED.EncounteredNonLocalSideEffect, true);
+        // dumpED("final CB ED", ED, Changed);
+      }
+      // dbgs() << "I: " << I << "\n";
+
+      for (auto *SuccBB : successors(BB)) {
+        if (LivenessAA.isEdgeDead(BB, SuccBB))
+          continue;
+        Worklist.push_back(SuccBB);
+      }
+      if (!isa<UnreachableInst>(BB->getTerminator()) &&
+          !BB->getTerminator()->getNumSuccessors()) {
+        auto &FnED = BEDMap[nullptr];
+        MergeInPredecessor(FnED, ED, false, Changed);
+
+        if (OMPInfoCache.Kernels.count(F))
+          HandleAlignedBarrier(nullptr, ED);
+      }
+    }
+
+    errs() << BB->getName() << "\n";
+    Changed |= neqED(ED, InitialED);
+    dumpED("final ED", ED, Changed);
+    BEDMap[BB] = ED;
+  }
+  errs() << "Done worklist " << Changed << "\n";
+
+  // Propagate sync instruction effects backwards until the
+  // entry is hit or an aligned barrier.
+  Visited.clear();
+  while (!SyncInstWorklist.empty()) {
+    Instruction *SyncInst = SyncInstWorklist.pop_back_val();
+    Instruction *CurInst = SyncInst;
+    bool HitAlignedBarrier = false;
+    while ((CurInst = CurInst->getPrevNode())) {
+      auto *CB = dyn_cast<CallBase>(CurInst);
+      if (!CB)
+        continue;
+      HitAlignedBarrier = AlignedBarriers.count(CB);
+      if (HitAlignedBarrier)
+        break;
+      auto &CallED = CEDMap[CB];
+      if (SetAndRecord(CallED.IsReachingAlignedBarrierOnly, false))
+        Changed = true;
+    }
+    if (HitAlignedBarrier)
+      continue;
+    BasicBlock *SyncBB = SyncInst->getParent();
+    for (auto *PredBB : predecessors(SyncBB)) {
+      if (LivenessAA.isEdgeDead(PredBB, SyncBB))
+        continue;
+      if (!Visited.insert(PredBB))
+        continue;
+      SyncInstWorklist.push_back(PredBB->getTerminator());
+      auto &PredED = BEDMap[PredBB];
+      if (SetAndRecord(PredED.IsReachingAlignedBarrierOnly, false))
+        Changed = true;
+    }
+    if (SyncBB != &SyncBB->getParent()->getEntryBlock())
+      continue;
+    auto &FnED = BEDMap[nullptr];
+    if (SetAndRecord(FnED.IsReachingAlignedBarrierOnly, false))
+      Changed = true;
+  }
+
+  errs() << "Update Impl done " << F->getName() << " :: " << Changed << "\n";
+  errs() << "BED: " << BEDMap.size() << " : " << CEDMap.size() << " : "
+         << AlignedBarriers.size() << "\n";
+#if 0
+  for (auto &It : BEDMap) {
+    if (It.first)
+      dumpED(It.first->getName(), It.second, Changed);
+    else
+      dumpED("Entry", It.second, Changed);
+  }
+  for (auto &It : CEDMap) {
+    dumpED(It.first->getName(), It.second, Changed);
+  }
+  for (auto *AB : AlignedBarriers)
+	  AB->dump();
+#endif
+  return Changed ? ChangeStatus::CHANGED : ChangeStatus::UNCHANGED;
 }
 
 /// Try to replace memory allocation calls called by a single thread with a
