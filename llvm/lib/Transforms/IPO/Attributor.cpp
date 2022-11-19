@@ -1899,6 +1899,7 @@ void Attributor::runTillFixpoint() {
 
     AbstractState &State = ChangedAA->getState();
     if (!State.isAtFixpoint()) {
+      errs() << "Not FIX " << *ChangedAA << "\n";
       State.indicatePessimisticFixpoint();
 
       NumAttributesTimedOut++;
