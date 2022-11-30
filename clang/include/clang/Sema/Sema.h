@@ -11891,6 +11891,7 @@ public:
       SourceLocation ModifierLoc, SourceLocation ColonLoc,
       SourceLocation EndLoc, CXXScopeSpec &ReductionIdScopeSpec,
       const DeclarationNameInfo &ReductionId,
+      ArrayRef<OpenMPReductionClauseModifier> Modifiers,
       ArrayRef<Expr *> UnresolvedReductions = llvm::None);
   /// Called on well-formed 'task_reduction' clause.
   OMPClause *ActOnOpenMPTaskReductionClause(
