@@ -4297,15 +4297,23 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
       Kind == OMPC_in_reduction) {
     Data.ExtraModifier = OMPC_REDUCTION_unknown;
     if (Kind == OMPC_reduction && getLangOpts().OpenMP >= 50 &&
-        (Tok.is(tok::identifier) || Tok.is(tok::kw_default)) &&
-        NextToken().is(tok::comma)) {
-      // Parse optional reduction modifier.
-      Data.ExtraModifier =
-          getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts());
-      Data.ExtraModifierLoc = Tok.getLocation();
-      ConsumeToken();
-      assert(Tok.is(tok::comma) && "Expected comma.");
-      (void)ConsumeToken();
+        (Tok.is(tok::identifier) || Tok.is(tok::kw_default))){
+      // Reduction now has multiple modifiers
+      // TODO: Check whether modifiers conflict
+      // TODO: Check whether modifiers can be applied
+      // on this scope (device, league etc)
+      while(NextToken().is(tok::comma)) {
+        // Parse optional reduction modifier.
+        llvm::dbgs() << "Parsing extra modifier\n";
+        Data.ExtraModifier =
+            getOpenMPSimpleClauseType(Kind, PP.getSpelling(Tok), getLangOpts());
+        Data.ReductionTypeModifiers.push_back(
+            static_cast<OpenMPReductionClauseModifier>(Data.ExtraModifier));
+        Data.ExtraModifierLoc = Tok.getLocation();
+        ConsumeToken();
+        assert(Tok.is(tok::comma) && "Expected comma.");
+        (void)ConsumeToken();
+      }
     }
     ColonProtectionRAIIObject ColonRAII(*this);
     if (getLangOpts().CPlusPlus)

@@ -1000,7 +1000,7 @@ enum __llvm_omp_default_reduction_choices : int32_t {
   _REDUCE_LEAGUE_VIA_SINGLE_LEVEL_ATOMICS = 1 << 8,
   _REDUCE_LEAGUE_VIA_TWO_LEVEL_ATOMICS = 1 << 9,
 
-  _PRIVATE_BUFFER_IS_SHARED = 1 << 7,
+  _PRIVATE_BUFFER_IS_SHARED = 1 << 10,
 };
 
 /// TODO
