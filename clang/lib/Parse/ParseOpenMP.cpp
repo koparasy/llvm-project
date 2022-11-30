@@ -4323,6 +4323,7 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
                                      /*EnteringContext=*/false);
     InvalidReductionId = ParseReductionId(
         *this, Data.ReductionOrMapperIdScopeSpec, UnqualifiedReductionId);
+    llvm::dbgs() << "Checking Operation Type\n";
     if (InvalidReductionId) {
       SkipUntil(tok::colon, tok::r_paren, tok::annot_pragma_openmp_end,
                 StopBeforeMatch);
@@ -4331,9 +4332,11 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
       Data.ColonLoc = ConsumeToken();
     else
       Diag(Tok, diag::warn_pragma_expected_colon) << "reduction identifier";
-    if (!InvalidReductionId)
+    if (!InvalidReductionId){
       Data.ReductionOrMapperId =
           Actions.GetNameFromUnqualifiedId(UnqualifiedReductionId);
+      llvm::dbgs() << "Data Reduction Mapper Id:\n" << Data.ReductionOrMapperId << "\n";
+    }
   } else if (Kind == OMPC_depend) {
     if (getLangOpts().OpenMP >= 50) {
       if (Tok.is(tok::identifier) && PP.getSpelling(Tok) == "iterator") {

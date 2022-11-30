@@ -17649,7 +17649,8 @@ OMPClause *Sema::ActOnOpenMPVarListClause(OpenMPClauseKind Kind,
     Res = ActOnOpenMPReductionClause(
         VarList, static_cast<OpenMPReductionClauseModifier>(ExtraModifier),
         StartLoc, LParenLoc, ExtraModifierLoc, ColonLoc, EndLoc,
-        Data.ReductionOrMapperIdScopeSpec, Data.ReductionOrMapperId);
+        Data.ReductionOrMapperIdScopeSpec, Data.ReductionOrMapperId,
+        Data.ReductionTypeModifiers);
     break;
   case OMPC_task_reduction:
     Res = ActOnOpenMPTaskReductionClause(
@@ -19184,8 +19185,7 @@ static bool actOnOMPReductionKindClause(
       RD.push(RefExpr, DeclareReductionRef.get());
       continue;
     }
-    if (BOK == BO_Comma && DeclareReductionRef.isUnset()) {
-      // Not allowed reduction identifier is found.
+    if (BOK == BO_Comma && DeclareReductionRef.isUnset()) { // Not allowed reduction identifier is found.
       S.Diag(ReductionId.getBeginLoc(),
              diag::err_omp_unknown_reduction_identifier)
           << Type << ReductionIdRange;
@@ -19646,7 +19646,8 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
     SourceLocation StartLoc, SourceLocation LParenLoc,
     SourceLocation ModifierLoc, SourceLocation ColonLoc, SourceLocation EndLoc,
     CXXScopeSpec &ReductionIdScopeSpec, const DeclarationNameInfo &ReductionId,
-    ArrayRef<Expr *> UnresolvedReductions) {
+    ArrayRef<OpenMPReductionClauseModifier> Modifiers,
+    ArrayRef<Expr *> UnresolvedReductions) { 
   if (ModifierLoc.isValid() && Modifier == OMPC_REDUCTION_unknown) {
     Diag(LParenLoc, diag::err_omp_unexpected_clause_value)
         << getListOfPossibleValues(OMPC_reduction, /*First=*/0,
@@ -19670,6 +19671,16 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
   }
 
   ReductionData RD(VarList.size(), Modifier);
+
+  int ReductionType = 0;
+  for ( auto RT : Modifiers ){
+    if ( RT >= DeviceReductionModifierStart){ 
+      ReductionType |= (1<<(RT - DeviceReductionModifierStart));
+    }
+  }
+
+  llvm::dbgs() << "Reduction Type is " << ReductionType << "\n";
+
   if (actOnOMPReductionKindClause(*this, DSAStack, OMPC_reduction, VarList,
                                   StartLoc, LParenLoc, ColonLoc, EndLoc,
                                   ReductionIdScopeSpec, ReductionId,
@@ -19682,7 +19693,8 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
       RD.Privates, RD.LHSs, RD.RHSs, RD.ReductionOps, RD.InscanCopyOps,
       RD.InscanCopyArrayTemps, RD.InscanCopyArrayElems,
       buildPreInits(Context, RD.ExprCaptures),
-      buildPostUpdate(*this, RD.ExprPostUpdates));
+      buildPostUpdate(*this, RD.ExprPostUpdates),
+      ReductionType);
 }
 
 OMPClause *Sema::ActOnOpenMPTaskReductionClause(
