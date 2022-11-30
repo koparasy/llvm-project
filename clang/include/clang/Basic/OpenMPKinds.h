@@ -167,6 +167,9 @@ enum OpenMPReductionClauseModifier {
   OMPC_REDUCTION_unknown,
 };
 
+static constexpr unsigned NumberOfOMPReductionModifiers =
+    OMPC_REDUCTION_unknown;
+
 /// OpenMP adjust-op kinds for 'adjust_args' clause.
 enum OpenMPAdjustArgsOpKind {
 #define OPENMP_ADJUST_ARGS_KIND(Name) OMPC_ADJUST_ARGS_##Name,

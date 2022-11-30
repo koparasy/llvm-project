@@ -11831,6 +11831,8 @@ public:
     DeclarationNameInfo ReductionOrMapperId;
     int ExtraModifier = -1; ///< Additional modifier for linear, map, depend or
                             ///< lastprivate clause.
+    SmallVector<OpenMPReductionClauseModifier, NumberOfOMPReductionModifiers>
+      ReductionTypeModifiers;
     SmallVector<OpenMPMapModifierKind, NumberOfOMPMapClauseModifiers>
         MapTypeModifiers;
     SmallVector<SourceLocation, NumberOfOMPMapClauseModifiers>
