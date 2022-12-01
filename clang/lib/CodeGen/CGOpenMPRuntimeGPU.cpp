@@ -2558,21 +2558,34 @@ static llvm::Value *emitGlobalToListReduceFunction(
   return Fn;
 }
 
-static target::reduction::ElementType convertToReductionType(const llvm::Type *T, llvm::LLVMContext &Ctx) {
+static target::reduction::ElementType convertToReductionType(QualType RTy) {
   target::reduction::ElementType rType = target::reduction::ElementType::CUSTOM_TYPE;
-  if ( T == llvm::Type::getInt8Ty(Ctx) ){
-    rType = target::reduction::ElementType::INT8;
-  } else if ( T == llvm::Type::getInt16Ty(Ctx) ) {
-   rType = target::reduction::ElementType::INT16;
-  } else if ( T == llvm::Type::getInt32Ty(Ctx) ) {
-    rType = target::reduction::ElementType::INT32;
-  } else if ( T == llvm::Type::getInt64Ty(Ctx) ) {
-    rType = target::reduction::ElementType::INT64;
-  } else if ( T == llvm::Type::getFloatTy(Ctx) ) {
-    rType = target::reduction::ElementType::FLOAT;
-  } else if ( T == llvm::Type::getDoubleTy(Ctx) ) {
-    rType = target::reduction::ElementType::DOUBLE;
-  } 
+  if ( const BuiltinType *BRTy = RTy->getAs<BuiltinType>() ) {
+    switch (BRTy->getKind() ){
+      case BuiltinType::Kind::Char_S:
+      case BuiltinType::Kind::SChar:
+      case BuiltinType::Kind::WChar_S:
+        rType = target::reduction::ElementType::INT8;
+        break;
+      case BuiltinType::Kind::Short:
+        rType = target::reduction::ElementType::INT16;
+        break;
+      case BuiltinType::Kind::Int:
+        rType = target::reduction::ElementType::INT32;
+        break;
+      case BuiltinType::Kind::Long:
+        rType = target::reduction::ElementType::INT64;
+        break;
+      case BuiltinType::Kind::Float:
+        rType = target::reduction::ElementType::FLOAT;
+        break;
+      case BuiltinType::Kind::Double:
+        rType = target::reduction::ElementType::DOUBLE;
+        break;
+      default:
+        break;
+    }
+  }
   return rType;
 }
 
@@ -2584,9 +2597,10 @@ void CGOpenMPRuntimeGPU::emitReduction(
     return;
 
   SmallVector<llvm::OpenMPIRBuilder::TargetReductionValueInfo> ValueInfoVec;
+  target::reduction::ElementType rType; 
   for (unsigned I = 0, E = RHSExprs.size(); I < E; ++I) {
     llvm::Value *Priv = CGF.EmitLValue(Privates[I]).getPointer(CGF);
-    target::reduction::ElementType rType = convertToReductionType(Priv->getType(), CGF.getLLVMContext());
+    rType = convertToReductionType(Privates[I]->getType());
     llvm::Value *LHS = CGF.EmitLValue(LHSExprs[I]).getPointer(CGF);
     llvm::Value *RHS = CGF.EmitLValue(RHSExprs[I]).getPointer(CGF);
     llvm::errs() << "Privates["<<I<<"] ";
@@ -2605,7 +2619,8 @@ void CGOpenMPRuntimeGPU::emitReduction(
   }
   CGBuilderTy &Bld = CGF.Builder;
 
-  llvm::dbgs() << "ReductionType is:" << Options.ReductionPolicy << "\n";
+  llvm::dbgs() << "Reduction Policy is:" << Options.ReductionPolicy << "\n";
+  llvm::dbgs() << "Reduction Type is:" << rType << "\n";
 
   bool ParallelReduction = isOpenMPParallelDirective(Options.ReductionKind);
 #ifndef NDEBUG
