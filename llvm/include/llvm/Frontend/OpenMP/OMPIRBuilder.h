@@ -1341,6 +1341,7 @@ public:
     Value *RHS;
     omp::target::reduction::Operation Op;
     omp::target::reduction::ElementType ElementTy;
+    int32_t Policy;
     uint32_t ItemSize;
     uint32_t NumItems;
   };

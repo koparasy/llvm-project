@@ -785,6 +785,7 @@ OMPReductionClause *OMPReductionClause::Create(
     ArrayRef<Expr *> RHSExprs, ArrayRef<Expr *> ReductionOps,
     ArrayRef<Expr *> CopyOps, ArrayRef<Expr *> CopyArrayTemps,
     ArrayRef<Expr *> CopyArrayElems, Stmt *PreInit, Expr *PostUpdate,
+    target::reduction::Operation ROP,
     int RT) {
   void *Mem = C.Allocate(totalSizeToAlloc<Expr *>(
       (Modifier == OMPC_REDUCTION_inscan ? 8 : 5) * VL.size()));
@@ -799,6 +800,7 @@ OMPReductionClause *OMPReductionClause::Create(
   Clause->setPreInitStmt(PreInit);
   Clause->setPostUpdateExpr(PostUpdate);
   Clause->setReductionType(RT);
+  Clause->setReductionOperator(ROP);
   if (Modifier == OMPC_REDUCTION_inscan) {
     Clause->setInscanCopyOps(CopyOps);
     Clause->setInscanCopyArrayTemps(CopyArrayTemps);

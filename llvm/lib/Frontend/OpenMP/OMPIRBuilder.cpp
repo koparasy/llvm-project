@@ -3944,7 +3944,7 @@ void OpenMPIRBuilder::createTargetDeinit(const LocationDescription &Loc,
   Builder.CreateCall(Fn, {Ident, IsSPMDVal});
 }
 
-  void OpenMPIRBuilder::createTargetReduction(
+void OpenMPIRBuilder::createTargetReduction(
     const LocationDescription &Loc, 
     InsertPointTy AllocaIP,
     ArrayRef<TargetReductionValueInfo> TRVI,
@@ -3954,47 +3954,47 @@ void OpenMPIRBuilder::createTargetDeinit(const LocationDescription &Loc,
   if (!updateToLocation(Loc))
     return;
 
-AllocaInst *SharedRedInfo, *PrivateRedInfo;
+  AllocaInst *SharedRedInfo, *PrivateRedInfo;
   {
-  IRBuilder<>::InsertPointGuard IPG(Builder);
-  Builder.restoreIP(AllocaIP);
-SharedRedInfo = Builder.CreateAlloca(OMPDefaultReduction, nullptr, "omp.shared.red.info");
-PrivateRedInfo = Builder.CreateAlloca(OMPDefaultReduction, nullptr, "omp.private.red.info");
+    IRBuilder<>::InsertPointGuard IPG(Builder);
+    Builder.restoreIP(AllocaIP);
+    SharedRedInfo = Builder.CreateAlloca(OMPDefaultReduction, nullptr, "omp.shared.red.info");
+    PrivateRedInfo = Builder.CreateAlloca(OMPDefaultReduction, nullptr, "omp.private.red.info");
   }
 
   BasicBlock *CurBB = Builder.GetInsertBlock();
   CurBB->getParent()->dump();
 
-    Constant *I32Null = ConstantInt::getNullValue(Int32);
-    Constant *I32One = ConstantInt::get(Int32, 1);
-    Constant *ConfigData[] = {
-ConstantInt::get(Int8, Level),
-ConstantInt::get(Int8, target::reduction::AllocationConfig::PREALLOCATED_IN_PLACE | target::reduction::AllocationConfig::PRE_INITIALIZED),
-ConstantInt::get(Int8, TRVI.front().Op),
-ConstantInt::get(Int8, TRVI.front().ElementTy),
-/* Choices */ I32Null,
-ConstantInt::get(Int32, TRVI.front().ItemSize),
-ConstantInt::get(Int32, TRVI.front().NumItems),
-/* BatchSize */ I32One,
-/* NumParticipants */ I32Null,
-/* BufferPtr */ Constant::getNullValue(VoidPtr),
-/* CounterPtr */ Constant::getNullValue(Int32Ptr),
-/* AllocatorFnPtr */ Constant::getNullValue(VoidPtr),
-/* InitializerFnPtr */ Constant::getNullValue(VoidPtr),
-};
-M.dump();
-OMPDefaultReductionConfig->dump();
+  Constant *I32Null = ConstantInt::getNullValue(Int32);
+  Constant *I32One = ConstantInt::get(Int32, 1);
+  Constant *ConfigData[] = {
+    ConstantInt::get(Int8, Level),
+    ConstantInt::get(Int8, target::reduction::AllocationConfig::PREALLOCATED_IN_PLACE | target::reduction::AllocationConfig::PRE_INITIALIZED),
+    ConstantInt::get(Int8, TRVI.front().Op),
+    ConstantInt::get(Int8, TRVI.front().ElementTy),
+    /* Choices */ I32Null,
+    ConstantInt::get(Int32, TRVI.front().ItemSize),
+    ConstantInt::get(Int32, TRVI.front().NumItems),
+    /* BatchSize */ I32One,
+    /* NumParticipants */ I32Null,
+    /* BufferPtr */ Constant::getNullValue(VoidPtr),
+    /* CounterPtr */ Constant::getNullValue(Int32Ptr),
+    /* AllocatorFnPtr */ Constant::getNullValue(VoidPtr),
+    /* InitializerFnPtr */ Constant::getNullValue(VoidPtr),
+  };
+  M.dump();
+  OMPDefaultReductionConfig->dump();
 
-    Constant *Initializer = 
-ConstantStruct::get(OMPDefaultReductionConfig, ConfigData);
+  Constant *Initializer = 
+  ConstantStruct::get(OMPDefaultReductionConfig, ConfigData);
 
-auto *ConfigPtrGV = new GlobalVariable(
-  M, OMPDefaultReductionConfig,
-  /* isConstant = */ true, GlobalValue::PrivateLinkage, Initializer, "omp.red.config",
-  nullptr, GlobalValue::NotThreadLocal,
-  M.getDataLayout().getDefaultGlobalsAddressSpace());
-ConfigPtrGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-ConfigPtrGV->setAlignment(Align(8));
+  auto *ConfigPtrGV = new GlobalVariable(
+    M, OMPDefaultReductionConfig,
+    /* isConstant = */ true, GlobalValue::PrivateLinkage, Initializer, "omp.red.config",
+    nullptr, GlobalValue::NotThreadLocal,
+    M.getDataLayout().getDefaultGlobalsAddressSpace());
+  ConfigPtrGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+  ConfigPtrGV->setAlignment(Align(8));
 
   auto *PrivateRedInfoConfigGEP = 
       Builder.CreateInBoundsGEP(OMPDefaultReduction, PrivateRedInfo,
@@ -4008,7 +4008,6 @@ ConfigPtrGV->setAlignment(Align(8));
   Function *InitFn = getOrCreateRuntimeFunctionPtr(
       omp::RuntimeFunction::OMPRTL___llvm_omp_default_reduction_init);
   Builder.CreateCall(InitFn, {PrivateRedInfo, Constant::getNullValue(OMPDefaultReductionConfigPtr)});
-
 
   auto *SharedRedInfoConfigGEP = 
       Builder.CreateInBoundsGEP(OMPDefaultReduction, SharedRedInfo,
