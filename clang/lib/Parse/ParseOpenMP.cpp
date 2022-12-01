@@ -4324,6 +4324,7 @@ bool Parser::ParseOpenMPVarList(OpenMPDirectiveKind DKind,
     InvalidReductionId = ParseReductionId(
         *this, Data.ReductionOrMapperIdScopeSpec, UnqualifiedReductionId);
     llvm::dbgs() << "Checking Operation Type\n";
+
     if (InvalidReductionId) {
       SkipUntil(tok::colon, tok::r_paren, tok::annot_pragma_openmp_end,
                 StopBeforeMatch);

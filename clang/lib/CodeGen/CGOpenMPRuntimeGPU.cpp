@@ -2536,6 +2536,24 @@ static llvm::Value *emitGlobalToListReduceFunction(
   return Fn;
 }
 
+static target::reduction::ElementType convertToReductionType(const llvm::Type *T, llvm::LLVMContext &Ctx) {
+  target::reduction::ElementType rType = target::reduction::ElementType::CUSTOM_TYPE;
+  if ( T == llvm::Type::getInt8Ty(Ctx) ){
+    rType = target::reduction::ElementType::INT8;
+  } else if ( T == llvm::Type::getInt16Ty(Ctx) ) {
+   rType = target::reduction::ElementType::INT16;
+  } else if ( T == llvm::Type::getInt32Ty(Ctx) ) {
+    rType = target::reduction::ElementType::INT32;
+  } else if ( T == llvm::Type::getInt64Ty(Ctx) ) {
+    rType = target::reduction::ElementType::INT64;
+  } else if ( T == llvm::Type::getFloatTy(Ctx) ) {
+    rType = target::reduction::ElementType::FLOAT;
+  } else if ( T == llvm::Type::getDoubleTy(Ctx) ) {
+    rType = target::reduction::ElementType::DOUBLE;
+  } 
+  return rType;
+}
+
 void CGOpenMPRuntimeGPU::emitReduction(
     CodeGenFunction &CGF, SourceLocation Loc, ArrayRef<const Expr *> Privates,
     ArrayRef<const Expr *> LHSExprs, ArrayRef<const Expr *> RHSExprs,
@@ -2543,25 +2561,29 @@ void CGOpenMPRuntimeGPU::emitReduction(
   if (!CGF.HaveInsertPoint())
     return;
 
-SmallVector<llvm::OpenMPIRBuilder::TargetReductionValueInfo> ValueInfoVec;
-for (unsigned I = 0, E = RHSExprs.size(); I < E; ++I) {
-  llvm::Value *Priv = CGF.EmitLValue(Privates[I]).getPointer(CGF);
-  llvm::Value *LHS = CGF.EmitLValue(LHSExprs[I]).getPointer(CGF);
-  llvm::Value *RHS = CGF.EmitLValue(RHSExprs[I]).getPointer(CGF);
+  SmallVector<llvm::OpenMPIRBuilder::TargetReductionValueInfo> ValueInfoVec;
+  for (unsigned I = 0, E = RHSExprs.size(); I < E; ++I) {
+    llvm::Value *Priv = CGF.EmitLValue(Privates[I]).getPointer(CGF);
+    target::reduction::ElementType rType = convertToReductionType(Priv->getType(), CGF.getLLVMContext());
+    llvm::Value *LHS = CGF.EmitLValue(LHSExprs[I]).getPointer(CGF);
+    llvm::Value *RHS = CGF.EmitLValue(RHSExprs[I]).getPointer(CGF);
     llvm::errs() << "Privates["<<I<<"] ";
-Privates[I]->dump();
-    llvm::errs() << *Priv << "\n";
-    llvm::errs() << "LHSExprs["<<I<<"] ";
-LHSExprs[I]->dump();
-    llvm::errs() << *LHS << "\n";
-    llvm::errs() << "RHSExprs["<<I<<"] ";
-RHSExprs[I]->dump();
-    llvm::errs() << *RHS << "\n";
-    llvm::errs() << "ReductionOps["<<I<<"] ";
-ReductionOps[I]->dump();
-    ValueInfoVec.push_back({Priv, LHS, RHS, target::reduction::Operation::ADD, target::reduction::ElementType::INT32, 4, 1}); 
-}
+    Privates[I]->dump();
+      llvm::errs() << *Priv << "\n";
+      llvm::errs() << "LHSExprs["<<I<<"] ";
+    LHSExprs[I]->dump();
+      llvm::errs() << *LHS << "\n";
+      llvm::errs() << "RHSExprs["<<I<<"] ";
+    RHSExprs[I]->dump();
+      llvm::errs() << *RHS << "\n";
+      llvm::errs() << "ReductionOps["<<I<<"] ";
+    ReductionOps[I]->dump();
+
+     ValueInfoVec.push_back({Priv, LHS, RHS, Options.rop, rType, Options.ReductionPolicy, 4, 1}); 
+  }
   CGBuilderTy &Bld = CGF.Builder;
+
+  llvm::dbgs() << "ReductionType is:" << Options.ReductionPolicy << "\n";
 
   bool ParallelReduction = isOpenMPParallelDirective(Options.ReductionKind);
 #ifndef NDEBUG
