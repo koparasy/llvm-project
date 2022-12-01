@@ -1994,11 +1994,11 @@ __llvm_omp_default_reduction_init(
     break;
   case _MAX:
     __init_fn = __llvm_omp_reduction_get_initializer_fn(
-        _VALUE_MAX, __config->__element_type);
+        _VALUE_MIN, __config->__element_type);
     break;
   case _MIN:
     __init_fn = __llvm_omp_reduction_get_initializer_fn(
-        _VALUE_MIN, __config->__element_type);
+        _VALUE_MAX, __config->__element_type);
     break;
   case _CUSTOM_OP:
     __init_fn = __config->__initializer_fn;
