@@ -1,6 +1,6 @@
 #include<iostream>
 
-#define DTYPE int 
+#define DTYPE long
 
 int main (int argc, char *argv[])
 {
@@ -12,7 +12,7 @@ int main (int argc, char *argv[])
     Data[I] = I - (Elements / 2);
 
   DTYPE Sum = 0;
-#pragma omp target teams distribute parallel for map(tofrom:Data[:Elements]) reduction(+:Sum)
+#pragma omp target teams distribute parallel for map(tofrom:Data[:Elements]) reduction(min:Sum)
   for (long I = 0 ; I < Elements; I++)
     Sum += Data[I];
 

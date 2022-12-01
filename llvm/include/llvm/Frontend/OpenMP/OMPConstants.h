@@ -235,7 +235,6 @@ enum AllocationConfig : unsigned char {
 };
 
 enum Operation : uint8_t {
-  NOP,
   /// Uses 0 initializer
   ADD,
   SUB,

@@ -18820,7 +18820,7 @@ static bool actOnOMPReductionKindClause(
   DeclarationName DN = ReductionId.getName();
   OverloadedOperatorKind OOK = DN.getCXXOverloadedOperator();
   BinaryOperatorKind BOK = BO_Comma;
-  target::reduction::Operation ROP = target::reduction::Operation::NOP; 
+  target::reduction::Operation ROP = target::reduction::Operation::CUSTOM_OP; 
 
   ASTContext &Context = S.Context;
   // OpenMP [2.14.3.6, reduction clause]

@@ -2589,6 +2589,33 @@ static target::reduction::ElementType convertToReductionType(QualType RTy) {
   return rType;
 }
 
+static uint32_t getReductionTypeSize(target::reduction::ElementType Type){
+  uint32_t Size;
+  switch ( Type ){
+    case target::reduction::ElementType::INT8:
+      Size = 1;
+      break;
+    case target::reduction::ElementType::INT16:
+      Size = 2;
+      break;
+    case target::reduction::ElementType::INT32:
+      Size = 4;
+      break;
+    case target::reduction::ElementType::INT64:
+      Size = 8;
+      break;
+    case target::reduction::ElementType::FLOAT:
+      Size = 4;
+      break;
+    case target::reduction::ElementType::DOUBLE:
+      Size = 8;
+      break;
+    default:
+      Size = 4;
+  }
+  return Size;
+}
+
 void CGOpenMPRuntimeGPU::emitReduction(
     CodeGenFunction &CGF, SourceLocation Loc, ArrayRef<const Expr *> Privates,
     ArrayRef<const Expr *> LHSExprs, ArrayRef<const Expr *> RHSExprs,
@@ -2614,8 +2641,13 @@ void CGOpenMPRuntimeGPU::emitReduction(
       llvm::errs() << *RHS << "\n";
       llvm::errs() << "ReductionOps["<<I<<"] ";
     ReductionOps[I]->dump();
-
-     ValueInfoVec.push_back({Priv, LHS, RHS, Options.rop, rType, Options.ReductionPolicy, 4, 1}); 
+    ValueInfoVec.push_back({Priv, 
+       LHS, RHS, 
+       Options.rop, 
+       rType, 
+       Options.ReductionPolicy, 
+       getReductionTypeSize(rType), 
+       1}); 
   }
   CGBuilderTy &Bld = CGF.Builder;
 
