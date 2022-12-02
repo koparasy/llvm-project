@@ -1866,7 +1866,8 @@ public:
   bool isAssumedDead(const Instruction &I, const AbstractAttribute *QueryingAA,
                      const AAIsDead *LivenessAA, bool &UsedAssumedInformation,
                      bool CheckBBLivenessOnly = false,
-                     DepClassTy DepClass = DepClassTy::OPTIONAL);
+                     DepClassTy DepClass = DepClassTy::OPTIONAL,
+                     bool CheckForDeadStore = false);
 
   /// Return true if \p U is assumed dead.
   ///

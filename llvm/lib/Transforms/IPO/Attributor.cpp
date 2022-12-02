@@ -1292,7 +1292,8 @@ bool Attributor::isAssumedDead(const Instruction &I,
                                const AbstractAttribute *QueryingAA,
                                const AAIsDead *FnLivenessAA,
                                bool &UsedAssumedInformation,
-                               bool CheckBBLivenessOnly, DepClassTy DepClass) {
+                               bool CheckBBLivenessOnly, DepClassTy DepClass,
+                               bool CheckForDeadStore) {
   const IRPosition::CallBaseContext *CBCtx =
       QueryingAA ? QueryingAA->getCallBaseContext() : nullptr;
 
@@ -1327,6 +1328,14 @@ bool Attributor::isAssumedDead(const Instruction &I,
     return false;
 
   if (IsDeadAA.isAssumedDead()) {
+    if (QueryingAA)
+      recordDependence(IsDeadAA, *QueryingAA, DepClass);
+    if (!IsDeadAA.isKnownDead())
+      UsedAssumedInformation = true;
+    return true;
+  }
+
+  if (CheckForDeadStore && isa<StoreInst>(I) && IsDeadAA.isRemovableStore()) {
     if (QueryingAA)
       recordDependence(IsDeadAA, *QueryingAA, DepClass);
     if (!IsDeadAA.isKnownDead())

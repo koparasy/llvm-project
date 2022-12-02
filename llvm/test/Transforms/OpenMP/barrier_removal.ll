@@ -68,12 +68,52 @@ define void @pos_empty_6() {
   call i32 @llvm.nvvm.barrier0.popc(i32 0)
   ret void
 }
-define void @neg_empty_7() {
-; CHECK-LABEL: define {{[^@]+}}@neg_empty_7() {
+; FIXME: This should be empty
+define void @pos_empty_7() {
+; CHECK-LABEL: define {{[^@]+}}@pos_empty_7() {
 ; CHECK-NEXT:    call void @llvm.amdgcn.s.barrier()
 ; CHECK-NEXT:    ret void
 ;
   call void @llvm.amdgcn.s.barrier()
+  ret void
+}
+; FIXME: This should be empty
+define void @pos_empty_8(i1 %c) {
+; CHECK-LABEL: define {{[^@]+}}@pos_empty_8
+; CHECK-SAME: (i1 [[C:%.*]]) {
+; CHECK-NEXT:    br i1 [[C]], label [[T:%.*]], label [[F:%.*]]
+; CHECK:       t:
+; CHECK-NEXT:    br label [[F]]
+; CHECK:       f:
+; CHECK-NEXT:    br label [[E:%.*]]
+; CHECK:       e:
+; CHECK-NEXT:    ret void
+;
+  br i1 %c, label %t, label %f
+t:
+  call void @aligned_barrier()
+  br label %f
+f:
+  call void @aligned_barrier()
+  br label %e
+e:
+  ret void
+}
+define void @neg_empty_8(i1 %c) {
+; CHECK-LABEL: define {{[^@]+}}@neg_empty_8
+; CHECK-SAME: (i1 [[C:%.*]]) {
+; CHECK-NEXT:    br i1 [[C]], label [[T:%.*]], label [[F:%.*]]
+; CHECK:       t:
+; CHECK-NEXT:    call void @llvm.amdgcn.s.barrier()
+; CHECK-NEXT:    br label [[F]]
+; CHECK:       f:
+; CHECK-NEXT:    ret void
+;
+  br i1 %c, label %t, label %f
+t:
+  call void @llvm.amdgcn.s.barrier()
+  br label %f
+f:
   ret void
 }
 define void @neg_empty_1() {
@@ -102,7 +142,6 @@ define void @pos_constant_loads() {
 ; CHECK-NEXT:    [[B:%.*]] = load i32, i32* addrspacecast (i32 addrspace(4)* @GC2 to i32*), align 4
 ; CHECK-NEXT:    [[ARGC:%.*]] = addrspacecast i32 addrspace(4)* [[ARG]] to i32*
 ; CHECK-NEXT:    [[C:%.*]] = load i32, i32* [[ARGC]], align 4
-; CHECK-NEXT:    call void @aligned_barrier()
 ; CHECK-NEXT:    [[D:%.*]] = add i32 42, [[B]]
 ; CHECK-NEXT:    [[E:%.*]] = add i32 [[D]], [[C]]
 ; CHECK-NEXT:    call void @useI32(i32 [[E]])
@@ -162,9 +201,9 @@ define void @pos_priv_mem() {
 ; CHECK-NEXT:    [[ARG:%.*]] = load i32 addrspace(5)*, i32 addrspace(5)** @GPtr5, align 8
 ; CHECK-NEXT:    [[LOC:%.*]] = alloca i32, align 4
 ; CHECK-NEXT:    [[A:%.*]] = load i32, i32* @PG1, align 4
+; CHECK-NEXT:    call void @aligned_barrier()
 ; CHECK-NEXT:    store i32 [[A]], i32* [[LOC]], align 4
 ; CHECK-NEXT:    [[B:%.*]] = load i32, i32* addrspacecast (i32 addrspace(5)* @PG2 to i32*), align 4
-; CHECK-NEXT:    call void @aligned_barrier()
 ; CHECK-NEXT:    [[ARGC:%.*]] = addrspacecast i32 addrspace(5)* [[ARG]] to i32*
 ; CHECK-NEXT:    store i32 [[B]], i32* [[ARGC]], align 4
 ; CHECK-NEXT:    [[V:%.*]] = load i32, i32* [[LOC]], align 4
@@ -212,9 +251,11 @@ define void @neg_mem() {
   ret void
 }
 
+; FIXME: This should be empty
 define void @pos_multiple() {
 ; CHECK-LABEL: define {{[^@]+}}@pos_multiple() {
 ; CHECK-NEXT:    call void @llvm.amdgcn.s.barrier()
+; CHECK-NEXT:    call void @aligned_barrier()
 ; CHECK-NEXT:    ret void
 ;
   call void @llvm.nvvm.barrier0()
@@ -228,8 +269,8 @@ define void @pos_multiple() {
   ret void
 }
 
-!llvm.module.flags = !{!12,!13}
-!nvvm.annotations = !{!0,!1,!2,!3,!4,!5,!6,!7,!8,!9,!10,!11}
+!llvm.module.flags = !{!14,!15}
+!nvvm.annotations = !{!0,!1,!2,!3,!4,!5,!6,!7,!8,!9,!10,!11,!12,!13}
 
 !0 = !{void ()* @pos_empty_1, !"kernel", i32 1}
 !1 = !{void ()* @pos_empty_2, !"kernel", i32 1}
@@ -237,18 +278,21 @@ define void @pos_multiple() {
 !3 = !{void ()* @pos_empty_4, !"kernel", i32 1}
 !4 = !{void ()* @pos_empty_5, !"kernel", i32 1}
 !5 = !{void ()* @pos_empty_6, !"kernel", i32 1}
-!6 = !{void ()* @neg_empty_7, !"kernel", i32 1}
-!7 = !{void ()* @pos_constant_loads, !"kernel", i32 1}
-!8 = !{void ()* @neg_loads, !"kernel", i32 1}
-!9 = !{void ()* @pos_priv_mem, !"kernel", i32 1}
-!10 = !{void ()* @neg_mem, !"kernel", i32 1}
-!11 = !{void ()* @pos_multiple, !"kernel", i32 1}
-!12 = !{i32 7, !"openmp", i32 50}
-!13 = !{i32 7, !"openmp-device", i32 50}
+!6 = !{void ()* @pos_empty_7, !"kernel", i32 1}
+!7 = !{void (i1)* @pos_empty_8, !"kernel", i32 1}
+!8 = !{void (i1)* @neg_empty_8, !"kernel", i32 1}
+!9 = !{void ()* @pos_constant_loads, !"kernel", i32 1}
+!10 = !{void ()* @neg_loads, !"kernel", i32 1}
+!11 = !{void ()* @pos_priv_mem, !"kernel", i32 1}
+!12 = !{void ()* @neg_mem, !"kernel", i32 1}
+!13 = !{void ()* @pos_multiple, !"kernel", i32 1}
+!14 = !{i32 7, !"openmp", i32 50}
+!15 = !{i32 7, !"openmp-device", i32 50}
 ;.
 ; CHECK: attributes #[[ATTR0:[0-9]+]] = { "llvm.assume"="ompx_aligned_barrier" }
 ; CHECK: attributes #[[ATTR1:[0-9]+]] = { convergent nocallback nounwind }
 ; CHECK: attributes #[[ATTR2:[0-9]+]] = { convergent nocallback nofree nounwind willreturn }
+; CHECK: attributes #[[ATTR3:[0-9]+]] = { inaccessiblememonly nocallback nofree nosync nounwind willreturn }
 ;.
 ; CHECK: [[META0:![0-9]+]] = !{i32 7, !"openmp", i32 50}
 ; CHECK: [[META1:![0-9]+]] = !{i32 7, !"openmp-device", i32 50}
@@ -258,10 +302,12 @@ define void @pos_multiple() {
 ; CHECK: [[META5:![0-9]+]] = !{void ()* @pos_empty_4, !"kernel", i32 1}
 ; CHECK: [[META6:![0-9]+]] = !{void ()* @pos_empty_5, !"kernel", i32 1}
 ; CHECK: [[META7:![0-9]+]] = !{void ()* @pos_empty_6, !"kernel", i32 1}
-; CHECK: [[META8:![0-9]+]] = !{void ()* @neg_empty_7, !"kernel", i32 1}
-; CHECK: [[META9:![0-9]+]] = !{void ()* @pos_constant_loads, !"kernel", i32 1}
-; CHECK: [[META10:![0-9]+]] = !{void ()* @neg_loads, !"kernel", i32 1}
-; CHECK: [[META11:![0-9]+]] = !{void ()* @pos_priv_mem, !"kernel", i32 1}
-; CHECK: [[META12:![0-9]+]] = !{void ()* @neg_mem, !"kernel", i32 1}
-; CHECK: [[META13:![0-9]+]] = !{void ()* @pos_multiple, !"kernel", i32 1}
+; CHECK: [[META8:![0-9]+]] = !{void ()* @pos_empty_7, !"kernel", i32 1}
+; CHECK: [[META9:![0-9]+]] = !{void (i1)* @pos_empty_8, !"kernel", i32 1}
+; CHECK: [[META10:![0-9]+]] = !{void (i1)* @neg_empty_8, !"kernel", i32 1}
+; CHECK: [[META11:![0-9]+]] = !{void ()* @pos_constant_loads, !"kernel", i32 1}
+; CHECK: [[META12:![0-9]+]] = !{void ()* @neg_loads, !"kernel", i32 1}
+; CHECK: [[META13:![0-9]+]] = !{void ()* @pos_priv_mem, !"kernel", i32 1}
+; CHECK: [[META14:![0-9]+]] = !{void ()* @neg_mem, !"kernel", i32 1}
+; CHECK: [[META15:![0-9]+]] = !{void ()* @pos_multiple, !"kernel", i32 1}
 ;.
