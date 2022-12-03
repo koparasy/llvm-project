@@ -48,6 +48,9 @@ using namespace llvm;
 using namespace omp;
 
 static cl::opt<bool>
+    TwoKernelReduction("openmp-ir-builder-two-kernel-reduction", cl::Hidden,
+                       cl::desc(""), cl::init(false));
+static cl::opt<bool>
     OptimisticAttributes("openmp-ir-builder-optimistic-attributes", cl::Hidden,
                          cl::desc("Use optimistic attributes describing "
                                   "'as-if' properties of runtime calls."),
@@ -3893,6 +3896,7 @@ OpenMPIRBuilder::createTargetInit(const LocationDescription &Loc, bool IsSPMD) {
 
   CallInst *ThreadKind = Builder.CreateCall(
       Fn, {Ident, IsSPMDVal, UseGenericStateMachine});
+  LastKernel = ThreadKind->getFunction()->getName();
 
   Value *ExecUserCode = Builder.CreateICmpEQ(
       ThreadKind, ConstantInt::get(ThreadKind->getType(), -1),
@@ -3996,6 +4000,7 @@ Constant *OpenMPIRBuilder::registerTargetRegionFunction(
   InfoManager.registerTargetRegionEntryInfo(
       EntryInfo, EntryAddr, OutlinedFnID,
       OffloadEntriesInfoManager::OMPTargetRegionEntryTargetRegion);
+
   return OutlinedFnID;
 }
 
@@ -4020,22 +4025,31 @@ void OpenMPIRBuilder::createTargetReduction(
   BasicBlock *CurBB = Builder.GetInsertBlock();
   CurBB->getParent()->dump();
 
+  bool IsTwoKernelReduction =
+      TwoKernelReduction && Level == target::reduction::Level::LEAGUE;
+
+  Constant *Choices = ConstantInt::get(
+      Int32, IsTwoKernelReduction
+                 ? target::reduction::Choices::REDUCE_LEAGUE_VIA_SECOND_KERNEL
+                 : 0);
   Constant *I32Null = ConstantInt::getNullValue(Int32);
   Constant *I32One = ConstantInt::get(Int32, 1);
   Constant *ConfigData[] = {
-    ConstantInt::get(Int8, Level),
-    ConstantInt::get(Int8, target::reduction::AllocationConfig::PREALLOCATED_IN_PLACE | target::reduction::AllocationConfig::PRE_INITIALIZED),
-    ConstantInt::get(Int8, TRVI.front().Op),
-    ConstantInt::get(Int8, TRVI.front().ElementTy),
-    /* Choices */ I32Null,
-    ConstantInt::get(Int32, TRVI.front().ItemSize),
-    ConstantInt::get(Int32, TRVI.front().NumItems),
-    /* BatchSize */ I32One,
-    /* NumParticipants */ I32Null,
-    /* BufferPtr */ Constant::getNullValue(VoidPtr),
-    /* CounterPtr */ Constant::getNullValue(Int32Ptr),
-    /* AllocatorFnPtr */ Constant::getNullValue(VoidPtr),
-    /* InitializerFnPtr */ Constant::getNullValue(VoidPtr),
+      ConstantInt::get(Int8, Level),
+      ConstantInt::get(
+          Int8, target::reduction::AllocationConfig::PREALLOCATED_IN_PLACE |
+                    target::reduction::AllocationConfig::PRE_INITIALIZED),
+      ConstantInt::get(Int8, TRVI.front().Op),
+      ConstantInt::get(Int8, TRVI.front().ElementTy),
+      Choices,
+      ConstantInt::get(Int32, TRVI.front().ItemSize),
+      ConstantInt::get(Int32, TRVI.front().NumItems),
+      /* BatchSize */ I32One,
+      /* NumParticipants */ I32Null,
+      /* BufferPtr */ Constant::getNullValue(VoidPtr),
+      /* CounterPtr */ Constant::getNullValue(Int32Ptr),
+      /* AllocatorFnPtr */ Constant::getNullValue(VoidPtr),
+      /* InitializerFnPtr */ Constant::getNullValue(VoidPtr),
   };
   M.dump();
   OMPDefaultReductionConfig->dump();
@@ -4071,12 +4085,90 @@ void OpenMPIRBuilder::createTargetReduction(
       Builder.CreateInBoundsGEP(OMPDefaultReduction, SharedRedInfo,
                                 {Builder.getInt32(0), Builder.getInt32(1)});
   Builder.CreateStore(ConfigPtrGV, SharedRedInfoConfigGEP);
-  Builder.CreateStore(TRVI.front().LHS, SharedRedInfoPrivPtrGEP);
+
+  GlobalVariable *TeamsBufferGV = nullptr;
+  GlobalVariable *OutputPtrGV = nullptr;
+  if (!IsTwoKernelReduction) {
+    Builder.CreateStore(TRVI.front().LHS, SharedRedInfoPrivPtrGEP);
+  } else {
+
+    OutputPtrGV = new GlobalVariable(
+        M, Int8Ptr,
+        /* isConstant = */ false, GlobalValue::WeakODRLinkage,
+        UndefValue::get(Int8Ptr), LastKernel + "__red_output_ptr", nullptr,
+        GlobalValue::NotThreadLocal,
+        M.getDataLayout().getDefaultGlobalsAddressSpace());
+
+    TeamsBufferGV = new GlobalVariable(
+        M, Int8Ptr,
+        /* isConstant = */ false, GlobalValue::WeakODRLinkage,
+        UndefValue::get(Int8Ptr), LastKernel + "__red_teams_buffer_ptr",
+        nullptr, GlobalValue::NotThreadLocal,
+        M.getDataLayout().getDefaultGlobalsAddressSpace());
+
+    Value *TeamsBufferPtr = Builder.CreateLoad(Int8Ptr, TeamsBufferGV, false,
+                                               "red_teams_results_ptr");
+    Builder.CreateStore(TeamsBufferPtr, SharedRedInfoPrivPtrGEP);
+    Builder.CreateStore(TRVI.front().LHS, OutputPtrGV);
+  }
 
   Function *CombineFn = getOrCreateRuntimeFunctionPtr(
       omp::RuntimeFunction::OMPRTL___llvm_omp_default_reduction_combine);
   Builder.CreateCall(CombineFn, {SharedRedInfo, PrivateRedInfo});
   CurBB->getParent()->dump();
+
+  if (!IsTwoKernelReduction)
+    return;
+
+  Function *Fn = AllocaIP.getBlock()->getParent();
+  Type *VoidTy = Type::getVoidTy(M.getContext());
+  auto Int64Ty = Type::getInt64Ty(M.getContext());
+  FunctionType *RedFnTy = FunctionType::get(VoidTy, {Int64Ty}, false);
+  Function *RedFn =
+      Function::Create(RedFnTy, GlobalVariable::WeakODRLinkage,
+                       Fn->getAddressSpace(), LastKernel + "__red", &M);
+
+  auto *EntryBB = BasicBlock::Create(M.getContext(), "entry", RedFn);
+  Function *StandaloneCombineFn = getOrCreateRuntimeFunctionPtr(
+      omp::RuntimeFunction::OMPRTL___llvm_omp_default_reduction_combine_level2);
+
+  Builder.SetInsertPoint(EntryBB);
+  SharedRedInfo =
+      Builder.CreateAlloca(OMPDefaultReduction, nullptr, "omp.shared.red.info");
+  PrivateRedInfo = Builder.CreateAlloca(OMPDefaultReduction, nullptr,
+                                        "omp.private.red.info");
+
+  PrivateRedInfoConfigGEP =
+      Builder.CreateInBoundsGEP(OMPDefaultReduction, PrivateRedInfo,
+                                {Builder.getInt32(0), Builder.getInt32(0)});
+  PrivateRedInfoPrivPtrGEP =
+      Builder.CreateInBoundsGEP(OMPDefaultReduction, PrivateRedInfo,
+                                {Builder.getInt32(0), Builder.getInt32(1)});
+  Builder.CreateStore(ConfigPtrGV, PrivateRedInfoConfigGEP);
+  Value *TeamsBufferPtr = Builder.CreateLoad(Int8Ptr, TeamsBufferGV, false,
+                                             "red_teams_results_ptr");
+  Builder.CreateStore(TeamsBufferPtr, PrivateRedInfoPrivPtrGEP);
+
+  SharedRedInfoConfigGEP =
+      Builder.CreateInBoundsGEP(OMPDefaultReduction, SharedRedInfo,
+                                {Builder.getInt32(0), Builder.getInt32(0)});
+  SharedRedInfoPrivPtrGEP =
+      Builder.CreateInBoundsGEP(OMPDefaultReduction, SharedRedInfo,
+                                {Builder.getInt32(0), Builder.getInt32(1)});
+  Builder.CreateStore(ConfigPtrGV, SharedRedInfoConfigGEP);
+  Value *OutputPtr =
+      Builder.CreateLoad(Int8Ptr, OutputPtrGV, false, "red_output_ptr");
+  Builder.CreateStore(OutputPtr, SharedRedInfoPrivPtrGEP);
+
+  Builder.restoreIP(createTargetInit(Builder, /* IsSPMD */ true));
+  Builder.CreateCall(StandaloneCombineFn,
+                     {SharedRedInfo, PrivateRedInfo, &*RedFn->arg_begin()});
+  Builder.CreateRetVoid();
+  RedFn->dump();
+
+  assert(Config.isTargetCodegen());
+  createOffloadEntry(nullptr, RedFn,
+                     /*Size=*/0, 0, GlobalValue::WeakAnyLinkage);
 }
 
 std::string OpenMPIRBuilder::getNameWithSeparators(ArrayRef<StringRef> Parts,

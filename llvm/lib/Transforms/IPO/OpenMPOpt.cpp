@@ -2975,7 +2975,7 @@ ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
     ED.EncounteredAssumes->insert(&AI);
   };
 
-  auto IsPotentiallyAffectedByBarrier = [&](Optional<MemoryLocation> Loc,
+  auto IsPotentiallyAffectedByBarrier = [&](std::optional<MemoryLocation> Loc,
                                             Instruction &CtxI) {
     if (!Loc || !Loc->Ptr) {
       LLVM_DEBUG(dbgs() << "Access to unknown location requires barriers\n");
@@ -3143,12 +3143,12 @@ ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
             continue;
 
         if (MemIntrinsic *MI = dyn_cast<MemIntrinsic>(&I)) {
-          Optional<MemoryLocation> Loc = MemoryLocation::getForDest(MI);
+          auto Loc = MemoryLocation::getForDest(MI);
           if (!ED.EncounteredNonLocalSideEffect &&
               IsPotentiallyAffectedByBarrier(Loc, I))
             SetAndRecord(ED.EncounteredNonLocalSideEffect, true);
           if (MemTransferInst *MTI = dyn_cast<MemTransferInst>(&I)) {
-            Optional<MemoryLocation> Loc = MemoryLocation::getForSource(MTI);
+            auto Loc = MemoryLocation::getForSource(MTI);
             if (!ED.EncounteredNonLocalSideEffect &&
                 IsPotentiallyAffectedByBarrier(Loc, I))
               SetAndRecord(ED.EncounteredNonLocalSideEffect, true);
@@ -3201,7 +3201,7 @@ ChangeStatus AAExecutionDomainFunction::updateImpl(Attributor &A) {
         if (LI->hasMetadata(LLVMContext::MD_invariant_load))
           continue;
 
-      Optional<MemoryLocation> Loc = MemoryLocation::getOrNone(&I);
+      auto Loc = MemoryLocation::getOrNone(&I);
       if (!ED.EncounteredNonLocalSideEffect &&
           IsPotentiallyAffectedByBarrier(Loc, I))
         SetAndRecord(ED.EncounteredNonLocalSideEffect, true);

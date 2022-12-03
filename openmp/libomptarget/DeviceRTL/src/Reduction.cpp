@@ -999,8 +999,9 @@ enum __llvm_omp_default_reduction_choices : int32_t {
   _REDUCE_LEAGUE_VIA_PROCESSOR_IDX_BATCHED = 1 << 7,
   _REDUCE_LEAGUE_VIA_SINGLE_LEVEL_ATOMICS = 1 << 8,
   _REDUCE_LEAGUE_VIA_TWO_LEVEL_ATOMICS = 1 << 9,
+  _REDUCE_LEAGUE_VIA_SECOND_KERNEL = 1 << 10,
 
-  _PRIVATE_BUFFER_IS_SHARED = 1 << 10,
+  _PRIVATE_BUFFER_IS_SHARED = 1 << 25,
 };
 
 /// TODO
@@ -1162,36 +1163,38 @@ using ReducerFnTy = __llvm_omp_reduction_reducer_fn_ty;
 ///{
 ///
 #define TYPE_DEDUCER(FN_NAME)                                                  \
-  void FN_NAME(void *DstPtr, void *SrcPtr, RedConfigTy &Config) {              \
+  void FN_NAME(void *DstPtr, void *SrcPtr, RedConfigTy &Config,                \
+               int32_t NumItemsStandalone = -1) {                              \
                                                                                \
     switch (Config.__element_type) {                                           \
     case _INT8:                                                                \
       return FN_NAME<int8_t, int8_t>(reinterpret_cast<int8_t *>(DstPtr),       \
                                      reinterpret_cast<int8_t *>(SrcPtr),       \
-                                     Config);                                  \
+                                     Config, NumItemsStandalone);              \
     case _INT16:                                                               \
       return FN_NAME<int16_t, int16_t>(reinterpret_cast<int16_t *>(DstPtr),    \
                                        reinterpret_cast<int16_t *>(SrcPtr),    \
-                                       Config);                                \
+                                       Config, NumItemsStandalone);            \
     case _INT32:                                                               \
       return FN_NAME<int32_t, int32_t>(reinterpret_cast<int32_t *>(DstPtr),    \
                                        reinterpret_cast<int32_t *>(SrcPtr),    \
-                                       Config);                                \
+                                       Config, NumItemsStandalone);            \
     case _INT64:                                                               \
       return FN_NAME<int64_t, int64_t>(reinterpret_cast<int64_t *>(DstPtr),    \
                                        reinterpret_cast<int64_t *>(SrcPtr),    \
-                                       Config);                                \
+                                       Config, NumItemsStandalone);            \
     case _FLOAT:                                                               \
       return FN_NAME<float, int32_t>(reinterpret_cast<float *>(DstPtr),        \
                                      reinterpret_cast<float *>(SrcPtr),        \
-                                     Config);                                  \
+                                     Config, NumItemsStandalone);              \
     case _DOUBLE:                                                              \
       return FN_NAME<double, int64_t>(reinterpret_cast<double *>(DstPtr),      \
                                       reinterpret_cast<double *>(SrcPtr),      \
-                                      Config);                                 \
+                                      Config, NumItemsStandalone);             \
     case _CUSTOM_TYPE:                                                         \
       return FN_NAME<void, void>(reinterpret_cast<void *>(DstPtr),             \
-                                 reinterpret_cast<void *>(SrcPtr), Config);    \
+                                 reinterpret_cast<void *>(SrcPtr), Config,     \
+                                 NumItemsStandalone);                          \
       break;                                                                   \
     }                                                                          \
   }
@@ -1300,27 +1303,27 @@ reduceWarpImpl(Ty *TypedDstPtr, Ty *TypedSrcPtr, int32_t BatchSize, RedOpTy Op,
   Ty *TypedAcc = reinterpret_cast<Ty *>(&IntTypedAcc[0]);
 
   int32_t WarpSize = mapping::getWarpSize();
-  Width = Width == -1 ? WarpSize : Width;
-  int32_t Delta = WarpSize;
   int32_t WarpTId = mapping::getThreadIdInWarp();
+  int32_t Delta = WarpSize;
+  Width = Width == -1 ? WarpSize : Width;
 
-  // if (WarpTId == 0)
-  // printf("Mask: %i, Width: %i, Delta: %i\n", Mask, Width, Delta);
+  // if ( WarpTId == 0)
+  // printf("Mask: %li, Width: %i, Delta: %i\n", Mask, Width, Delta);
   do {
     Delta /= 2;
     for (int32_t i = 0; i < BatchSize; ++i) {
       // First we treat the values as IntTy to do the shuffle.
       IntTy IntTypedShuffleVal =
           utils::shuffleDown(Mask, IntTypedAcc[i], Delta, Width);
-      // if (WarpTId == 0)
-      // printf("%i :: D %i :: %lf [%li]\n", WarpTId, Delta, TypedAcc[i],
+      // if ( WarpTId < 4)
+      // printf("%i :: D %i :: %i [%i]\n", WarpTId, Delta, TypedAcc[i],
       // IntTypedShuffleVal);
 
       // Now we convert into Ty to do the reduce.
       Ty TypedShuffleVal = *reinterpret_cast<Ty *>(&IntTypedShuffleVal);
       reduceValues<Ty, IntTy>(&TypedAcc[i], TypedShuffleVal, Op, ReducerFn);
-      // if (WarpTId == 0)
-      // printf("%i :: D %i :: %lf [%lf]\n", WarpTId, Delta, TypedAcc[i],
+      // if ( WarpTId < 4)
+      // printf("%i :: D %i :: %i [%i]\n", WarpTId, Delta, TypedAcc[i],
       // TypedShuffleVal);
     }
   } while (Delta > 1);
@@ -1357,9 +1360,8 @@ reduceWarpImpl<void, void>(void *TypedDstPtr, void *TypedSrcPtr,
                            bool Atomically, uint64_t Mask, int32_t Width) {}
 
 template <typename Ty, typename IntTy>
-void reduceWarp(Ty *__restrict__ TypedDstPtr,
-                                               Ty *__restrict__ TypedSrcPtr,
-                                               RedConfigTy &Config) {
+void reduceWarp(Ty *__restrict__ TypedDstPtr, Ty *__restrict__ TypedSrcPtr,
+                RedConfigTy &Config, int32_t) {
   return reduceWarpImpl<Ty, IntTy>(
       TypedDstPtr, TypedSrcPtr, Config.__batch_size, Config.__op,
       Config.__reducer_fn,
@@ -1519,9 +1521,8 @@ reduceTeamImpl(Ty *TypedDstPtr, Ty *TypedSrcPtr, int32_t BatchSize, RedOpTy Op,
 }
 
 template <typename Ty, typename IntTy>
-void
-reduceTeam(Ty *__restrict__ TypedDstPtr, Ty *__restrict__ TypedSrcPtr,
-           RedConfigTy &Config) {
+void reduceTeam(Ty *__restrict__ TypedDstPtr, Ty *__restrict__ TypedSrcPtr,
+                RedConfigTy &Config, int32_t) {
   static_assert(sizeof(Ty) == sizeof(IntTy),
                 "Type and integer type need to match in size!");
 
@@ -1548,9 +1549,9 @@ reduceTeam(Ty *__restrict__ TypedDstPtr, Ty *__restrict__ TypedSrcPtr,
 }
 
 template <>
-void
-reduceTeam<void, void>(void *__restrict__ TypedDstPtr,
-                       void *__restrict__ TypedSrcPtr, RedConfigTy &Config) {}
+void reduceTeam<void, void>(void *__restrict__ TypedDstPtr,
+                            void *__restrict__ TypedSrcPtr, RedConfigTy &Config,
+                            int32_t) {}
 
 /// Simple wrapper around the templated reduceTeam to determine the actual and
 /// corresponding integer type of the reduction.
@@ -1726,7 +1727,8 @@ void reduceLeagueViaLargeBuffer(
     CounterValueForTeam =
         atomic::inc(CounterPtr, NumBlocks - 1, atomic::seq_cst);
 
-    if (mapping::isSPMDMode())
+  // Use a sycn_or here
+  if (mapping::isSPMDMode())
     synchronize::threadsAligned();
     else
     synchronize::threads(); // TODO this is probably not right
@@ -1836,8 +1838,8 @@ reduceLeagueViaAtomics(Ty *TypedDstPtr, Ty *TypedSrcPtr, int32_t BatchSize,
 #pragma omp allocate(TODO) allocator(omp_pteam_mem_alloc)
 
 template <typename Ty, typename IntTy>
-void
-reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config) {
+void reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config,
+                  int32_t) {
 
   // assert(Config.__num_participants == 0);
 
@@ -1864,6 +1866,7 @@ reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config) {
   bool UseLargeBuffer = Config.__choices & _REDUCE_LEAGUE_VIA_LARGE_BUFFER;
   bool UseTwoLevelAtomics =
       Config.__choices & _REDUCE_LEAGUE_VIA_TWO_LEVEL_ATOMICS;
+  bool UseTwoKernels = Config.__choices & _REDUCE_LEAGUE_VIA_SECOND_KERNEL;
 
   // TODO: This is not setup yet.
   Ty *TypedTODO = reinterpret_cast<Ty *>(TODO);
@@ -1921,6 +1924,15 @@ reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config) {
     reduceLeagueViaTwoLevelAtomics<Ty, IntTy>(
         TypedDstPtr, TypedIntermeditePtr, TypedBuffer, BatchSize, Config.__op,
         Config.__reducer_fn, Config.__element_type, NumItems, StartIdx);
+  } else if (UseTwoKernels) {
+
+    int32_t BlockId = mapping::getBlockId();
+    int32_t TId = mapping::getThreadIdInBlock();
+    if (TId)
+      return;
+
+    for (int32_t i = 0; i < NumItems; ++i)
+      TypedDstPtr[BlockId * NumItems + i] = TypedSrcPtr[i];
 
   } else {
 
@@ -1936,13 +1948,79 @@ reduceLeague(Ty *TypedDstPtr, Ty *TypedSrcPtr, RedConfigTy &Config) {
 }
 
 template <>
-void
-reduceLeague<void, void>(void *TypedDstPtr, void *TypedSrcPtr,
-                         RedConfigTy &Config) {}
+void reduceLeague<void, void>(void *TypedDstPtr, void *TypedSrcPtr,
+                              RedConfigTy &Config, int32_t) {}
 
 /// Simple wrapper around the templated reduceLeague to determine the actual
 /// and corresponding integer type of the reduction.
 TYPE_DEDUCER(reduceLeague);
+
+template <typename Ty, typename IntTy>
+void reduceLeagueStandalone(Ty *TypedDstPtr, Ty *TypedSrcPtr,
+                            RedConfigTy &Config, int32_t NumItems) {
+
+  int32_t BlockSize = mapping::getBlockSize(/* IsSPMD */ true);
+  int32_t TotalThreads = BlockSize * mapping::getNumberOfBlocks();
+  int32_t BatchSize = Config.__batch_size;
+  auto Op = Config.__op;
+  auto ReducerFn = Config.__reducer_fn;
+
+  int32_t TId = mapping::getThreadIdInBlock();
+  if (TId >= NumItems)
+    return;
+
+  // Reduce till we have no more input items than threads.
+  {
+    int32_t It = TId + TotalThreads;
+    while (It < NumItems) {
+      reduceValues<Ty, IntTy>(&TypedSrcPtr[TId], TypedSrcPtr[It], Op,
+                              ReducerFn);
+      It += TotalThreads;
+    }
+  }
+
+  Ty *TypedSharedMem;
+  if (BatchSize > 1)
+    TypedSharedMem = reinterpret_cast<Ty *>(&SharedMemScratchpadBatched[0]);
+  else
+    TypedSharedMem = reinterpret_cast<Ty *>(&SharedMemScratchpadScalar[0]);
+
+  int32_t WarpId = mapping::getWarpId();
+  reduceWarpImpl<Ty, IntTy>(&TypedSharedMem[WarpId], &TypedSrcPtr[TId],
+                            BatchSize, Op, ReducerFn, /* ReduceInto */ false,
+                            /* Atomically */ false, /* Mask */ lanes::All);
+
+  if (WarpId)
+    return;
+
+  //  if (TId == 0) {
+  //	  printf("S %li %li %li %li\n", (long int) TypedSharedMem[0], (long int)
+  //TypedSharedMem[1], (long int) TypedSharedMem[2], (long int)
+  //TypedSharedMem[3]);
+  //  }
+
+  synchronize::threadsAligned();
+
+  int32_t NumWarps = mapping::getNumberOfWarpsInBlock();
+  uint64_t Mask = utils::ballotSync(lanes::All, TId < NumWarps);
+  //  if (TId < NumWarps)
+  //    printf("Final reduce %p [%li] into %p [%li], %li\n",
+  //    &TypedSharedMem[TId], (long int)TypedSharedMem[TId],
+  //		  TypedDstPtr, (long int) *TypedDstPtr, Mask);
+  if (TId < NumWarps)
+    reduceWarpImpl<Ty, IntTy>(TypedDstPtr, &TypedSharedMem[TId], BatchSize, Op,
+                              ReducerFn, /* ReduceInto */ true,
+                              /* Atomically */ false, Mask);
+}
+
+template <>
+void reduceLeagueStandalone<void, void>(void *TypedDstPtr, void *TypedSrcPtr,
+                                        RedConfigTy &Config, int32_t NumItems) {
+}
+
+/// Simple wrapper around the templated reduceLeagueStandalone to determine the
+/// actual and corresponding integer type of the reduction.
+TYPE_DEDUCER(reduceLeagueStandalone);
 
 ///}
 
@@ -2133,6 +2211,23 @@ __llvm_omp_default_reduction_combine(
     return __llvm_omp_default_reduction_combine_warp(__shared_out_copy,
                                                      __private_copy);
   }
+}
+
+///
+
+extern "C" void __llvm_omp_default_reduction_combine_level2(
+    __llvm_omp_default_reduction *__restrict__ __shared_out_copy,
+    __llvm_omp_default_reduction *__restrict__ __private_copy,
+    int64_t NumItems) {
+  //	printf("NumItems %li\n", NumItems);
+  void *SrcPtr = __private_copy->__private_default_data;
+  void *DstPtr = __shared_out_copy->__private_default_data;
+
+  __llvm_omp_default_reduction_configuration_ty *__restrict__ Config =
+      __private_copy->__config;
+  //  printf("Src %p , Dst %p\n", SrcPtr, DstPtr);
+
+  _OMP::impl::reduceLeagueStandalone(DstPtr, SrcPtr, *Config, NumItems);
 }
 
 #pragma omp end declare target

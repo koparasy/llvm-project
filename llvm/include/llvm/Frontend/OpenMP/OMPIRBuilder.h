@@ -1492,6 +1492,8 @@ private:
   Constant *createTargetRegionEntryAddr(Function *OutlinedFunction,
                                         StringRef EntryFnName);
 
+  std::string LastKernel;
+
 public:
   /// Registers the given function and sets up the attribtues of the function
   /// Returns the FunctionID.

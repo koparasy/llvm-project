@@ -290,6 +290,7 @@ __OMP_RTL(__kmpc_end_reduce_nowait, false, Void, IdentPtr, Int32,
 
 __OMP_RTL(__llvm_omp_default_reduction_init, false, Void, OMPDefaultReductionPtr, OMPDefaultReductionPtr)
 __OMP_RTL(__llvm_omp_default_reduction_combine, false, Void, OMPDefaultReductionPtr, OMPDefaultReductionPtr)
+__OMP_RTL(__llvm_omp_default_reduction_combine_level2, false, Void, OMPDefaultReductionPtr, OMPDefaultReductionPtr, Int64)
 
 __OMP_RTL(__kmpc_ordered, false, Void, IdentPtr, Int32)
 __OMP_RTL(__kmpc_end_ordered, false, Void, IdentPtr, Int32)

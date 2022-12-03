@@ -267,7 +267,6 @@ enum ElementType : uint8_t {
   CUSTOM_TYPE,
 };
 
-
 enum Choices : uint32_t {
   REDUCE_WARP_FIRST = 1 << 0,
   REDUCE_ATOMICALLY_AFTER_WARP = 1 << 1,
@@ -275,7 +274,9 @@ enum Choices : uint32_t {
   REDUCE_LEAGUE_VIA_ATOMICS_WITH_OFFSET = 1 << 3,
   REDUCE_LEAGUE_VIA_LARGE_BUFFER = 1 << 4,
   REDUCE_LEAGUE_VIA_SYNCHRONIZED_SMALL_BUFFER = 1 << 5,
-  PRIVATE_BUFFER_IS_SHARED = 1 << 6,
+  REDUCE_LEAGUE_VIA_SECOND_KERNEL = 1 << 10,
+
+  PRIVATE_BUFFER_IS_SHARED = 1 << 25,
 };
 
 } // end namespace reduction

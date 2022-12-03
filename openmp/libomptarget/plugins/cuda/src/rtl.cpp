@@ -1117,7 +1117,7 @@ public:
                           ptrdiff_t *TgtOffsets, const int ArgNum,
                           const int TeamNum, const int ThreadLimit,
                           const unsigned int LoopTripCount,
-                          __tgt_async_info *AsyncInfo) const {
+                          __tgt_async_info *AsyncInfo) {
     // All args are references.
     std::vector<void *> Args(ArgNum);
     std::vector<void *> Ptrs(ArgNum);
@@ -1226,12 +1226,37 @@ public:
       CudaBlocksPerGrid = DeviceData[DeviceId].BlocksPerGrid;
     }
 
+    auto *OffloadEntry = getOffloadEntry(DeviceId, TgtEntryPtr);
+    CUdeviceptr RedBuffer;
+    CUfunction RedFunc;
+    if (OffloadEntry) {
+      std::string RedFuncName = std::string(OffloadEntry->name) + "__red";
+      INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId, "Looking for red func %s\n",
+           RedFuncName.c_str());
+
+      Err = cuModuleGetFunction(&RedFunc, Modules[DeviceId].back(),
+                                RedFuncName.c_str());
+      INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId, "red func %p : %i\n", RedFunc,
+           (int)Err);
+      if (Err == CUDA_SUCCESS) {
+        size_t CUSize;
+        std::string RedBufferName =
+            std::string(OffloadEntry->name) + "__red_teams_buffer_ptr";
+        Err = cuModuleGetGlobal(&RedBuffer, &CUSize, Modules[DeviceId].back(),
+                                RedBufferName.c_str());
+        void *Ptr =
+            dataAlloc(DeviceId, CudaBlocksPerGrid * 8, TARGET_ALLOC_DEVICE);
+        INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+             "red buffer %p = %p : [%i] %i\n", (void *)RedBuffer, Ptr,
+             (int)CUSize, (int)Err);
+        dataSubmit(DeviceId, (void *)RedBuffer, &Ptr, CUSize, AsyncInfo);
+      }
+    }
+
     INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
          "Launching kernel %s with %d blocks and %d threads in %s mode\n",
-         (getOffloadEntry(DeviceId, TgtEntryPtr))
-             ? getOffloadEntry(DeviceId, TgtEntryPtr)->name
-             : "(null)",
-         CudaBlocksPerGrid, CudaThreadsPerBlock,
+         OffloadEntry ? OffloadEntry->name : "(null)", CudaBlocksPerGrid,
+         CudaThreadsPerBlock,
          (!IsSPMDMode ? (IsGenericMode ? "Generic" : "SPMD-Generic") : "SPMD"));
 
     CUstream Stream = getStream(DeviceId, AsyncInfo);
@@ -1241,6 +1266,24 @@ public:
                          DynamicMemorySize, Stream, &Args[0], nullptr);
     if (!checkResult(Err, "Error returned from cuLaunchKernel\n"))
       return OFFLOAD_FAIL;
+    if (RedFunc && RedBuffer) {
+      uint64_t RedArg = CudaBlocksPerGrid;
+      void *RedArgP = (void *)&RedArg;
+      void **RedArgPtr = &RedArgP;
+      int NumRedThreads = CudaBlocksPerGrid > 128 ? 128 : CudaBlocksPerGrid;
+      INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+           "Launching reduction kernel %s with %d blocks and %d threads\n",
+           (std::string(OffloadEntry->name) + "__red").c_str(), 1,
+           NumRedThreads);
+      Err = cuLaunchKernel(RedFunc, /* gridDimzX */ 1, /* gridDimY */ 1,
+                           /* gridDimZ */ 1, NumRedThreads,
+                           /* blockDimY */ 1, /* blockDimZ */ 1, 0, Stream,
+                           &RedArgPtr[0], nullptr);
+      if (!checkResult(
+              Err,
+              "Error returned from cuLaunchKernel of reduction function\n"))
+        return OFFLOAD_FAIL;
+    }
 
     DP("Launch of entry point at " DPxMOD " successful!\n",
        DPxPTR(TgtEntryPtr));
