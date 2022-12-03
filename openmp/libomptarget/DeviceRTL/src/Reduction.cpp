@@ -1385,9 +1385,13 @@ static_assert(MaxDataTypeSize >= sizeof(double) &&
 
 /// TODO
 [[clang::loader_uninitialized]] static char
-    SharedMemScratchpad[MaxWarpSize * MaxBatchSize * MaxDataTypeSize]
+    SharedMemScratchpadBatched[MaxWarpSize * MaxBatchSize * MaxDataTypeSize]
     __attribute__((aligned(64)));
-#pragma omp allocate(SharedMemScratchpad) allocator(omp_pteam_mem_alloc)
+#pragma omp allocate(SharedMemScratchpadBatched) allocator(omp_pteam_mem_alloc)
+[[clang::loader_uninitialized]] static char
+    SharedMemScratchpadScalar[MaxWarpSize * MaxDataTypeSize]
+    __attribute__((aligned(64)));
+#pragma omp allocate(SharedMemScratchpadScalar) allocator(omp_pteam_mem_alloc)
 
 ///
 ///
@@ -1430,7 +1434,12 @@ reduceTeamImplHelper(Ty *TypedDstPtr, Ty *TypedSrcPtr, int32_t BatchSize,
   // assert(MaxWarpSize >= mapping::getWarpSize());
   // assert(MaxBatchSize >= BatchSize);
 
-  Ty *TypedSharedMem = reinterpret_cast<Ty *>(&SharedMemScratchpad[0]);
+  Ty *TypedSharedMem;
+  if (BatchSize > 1)
+    TypedSharedMem =  reinterpret_cast<Ty *>(&SharedMemScratchpadBatched[0]);
+  else
+    TypedSharedMem =  reinterpret_cast<Ty *>(&SharedMemScratchpadScalar[0]);
+
   int32_t BlockId = mapping::getBlockId();
 
   int32_t NumWarps = mapping::getNumberOfWarpsInBlock();
