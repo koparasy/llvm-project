@@ -36,6 +36,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/IntrinsicsNVPTX.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Support/Casting.h"
@@ -319,6 +320,9 @@ AA::combineOptionalValuesInAAValueLatice(const Optional<Value *> &A,
     return Ty ? getWithType(**B, *Ty) : nullptr;
   if (*A == nullptr)
     return nullptr;
+  if ((isa<IntrinsicInst>(*A) && cast<IntrinsicInst>(*A)->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ntid_x) &&
+    (isa<IntrinsicInst>(*B) && cast<IntrinsicInst>(*B)->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ntid_x))
+    return A;
   if (!Ty)
     Ty = (*A)->getType();
   if (isa_and_nonnull<UndefValue>(*A))

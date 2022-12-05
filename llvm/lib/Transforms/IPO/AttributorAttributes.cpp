@@ -10358,8 +10358,104 @@ struct AAPotentialValuesImpl : AAPotentialValues {
     return indicatePessimisticFixpoint();
   }
 
+  /// Ensure the return value is \p V with type \p Ty, if not possible return
+  /// nullptr. If \p Check is true we will only verify such an operation would
+  /// suceed and return a non-nullptr value if that is the case. No IR is
+  /// generated or modified.
+  static Value *ensureType(Attributor &A, Value &V, Type &Ty, Instruction *CtxI,
+                           bool Check) {
+    if (auto *TypedV = AA::getWithType(V, Ty))
+      return TypedV;
+    if (CtxI && V.getType()->canLosslesslyBitCastTo(&Ty))
+      return Check ? &V
+                   : BitCastInst::CreatePointerBitCastOrAddrSpaceCast(&V, &Ty,
+                                                                      "", CtxI);
+    return nullptr;
+  }
+
+  /// Reproduce \p I with type \p Ty or return nullptr if that is not posisble.
+  /// If \p Check is true we will only verify such an operation would suceed and
+  /// return a non-nullptr value if that is the case. No IR is generated or
+  /// modified.
+  static Value *reproduceInst(Attributor &A,
+                              const AbstractAttribute &QueryingAA,
+                              Instruction &I, Type &Ty, Instruction *CtxI,
+                              bool Check, ValueToValueMapTy &VMap) {
+    assert(CtxI && "Cannot reproduce an instruction without context!");
+    if (Check) {
+         if (I.mayReadFromMemory() ||
+                  !isSafeToSpeculativelyExecute(&I, CtxI, /* DT */ nullptr,
+                                                /* TLI */ nullptr))
+           return nullptr;
+    }
+    for (Value *Op : I.operands()) {
+      Value *NewOp = reproduceValue(A, QueryingAA, *Op, Ty, CtxI, Check, VMap);
+      if (!NewOp) {
+        assert(Check && "Manifest of new value unexpectedly failed!");
+        return nullptr;
+      }
+      if (!Check)
+        VMap[Op] = NewOp;
+    }
+    if (Check)
+      return &I;
+
+    Instruction *CloneI = I.clone();
+    // TODO: Try to salvage debug information here.
+    CloneI->setDebugLoc(DebugLoc());
+    VMap[&I] = CloneI;
+    CloneI->insertBefore(CtxI);
+    RemapInstruction(CloneI, VMap);
+    return CloneI;
+  }
+
+  /// Reproduce \p V with type \p Ty or return nullptr if that is not posisble.
+  /// If \p Check is true we will only verify such an operation would suceed and
+  /// return a non-nullptr value if that is the case. No IR is generated or
+  /// modified.
+  static Value *reproduceValue(Attributor &A,
+                               const AbstractAttribute &QueryingAA, Value &V,
+                               Type &Ty, Instruction *CtxI, bool Check,
+                               ValueToValueMapTy &VMap) {
+    if (const auto &NewV = VMap.lookup(&V))
+      return NewV;
+    bool UsedAssumedInformation = false;
+    if (auto *C = dyn_cast<Constant>(&V))
+      return C;
+    if (auto *II = dyn_cast<IntrinsicInst>(&V))
+      if (II->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_tid_x ||
+ 	  II->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ctaid_x)
+	 return nullptr;
+    if (CtxI && AA::isValidAtPosition(AA::ValueAndContext(V, *CtxI),
+                                      A.getInfoCache()))
+      return ensureType(A, V, Ty, CtxI, Check);
+    if (!CtxI)
+     return nullptr;
+    if (auto *I = dyn_cast<Instruction>(&V))
+      if (Value *NewV = reproduceInst(A, QueryingAA, *I, Ty, CtxI, Check, VMap))
+        if (Value *NewVTyped = ensureType(A, *NewV, Ty, CtxI, Check))
+	  return NewVTyped;
+    return nullptr;
+  }
+
+  /// Return a value we can use as replacement for the associated one, or
+  /// nullptr if we don't have one that makes sense.
+  Value *manifestReplacementValue(Attributor &A, Value *V, Instruction *CtxI) const {
+      ValueToValueMapTy VMap;
+      // First verify we can reprduce the value with the required type at the
+      // context location before we actually start modifying the IR.
+      if (reproduceValue(A, *this, *V, *getAssociatedType(), CtxI,
+                         /* CheckOnly */ true, VMap))
+        return reproduceValue(A, *this, *V, *getAssociatedType(), CtxI,
+                              /* CheckOnly */ false, VMap);
+    return nullptr;
+  }
+
   /// See AbstractAttribute::manifest(...).
   ChangeStatus manifest(Attributor &A) override {
+      Instruction *IP = dyn_cast_or_null<Instruction>(getCtxI());
+      if (auto *PHI = dyn_cast_or_null<PHINode>(IP))
+        IP = &*PHI->getParent()->getFirstInsertionPt();
     SmallVector<AA::ValueAndContext> Values;
     for (AA::ValueScope S : {AA::Interprocedural, AA::Intraprocedural}) {
       Values.clear();
@@ -10371,11 +10467,20 @@ struct AAPotentialValuesImpl : AAPotentialValues {
       Value *NewV = getSingleValue(A, *this, getIRPosition(), Values);
       if (!NewV || NewV == &OldV)
         continue;
-      if (getCtxI() &&
+  #if 1
+    if (auto *II = dyn_cast<IntrinsicInst>(NewV))
+	  if (II->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_tid_x || II->getIntrinsicID() == Intrinsic::nvvm_read_ptx_sreg_ctaid_x)
+		  continue;
+      if (getCtxI() &&  ensureType(A, *NewV, *getAssociatedType(), getCtxI(), true) &&
           !AA::isValidAtPosition({*NewV, *getCtxI()}, A.getInfoCache()))
         continue;
-      if (A.changeAfterManifest(getIRPosition(), *NewV))
+      if (A.changeAfterManifest(getIRPosition(), *ensureType(A, *NewV, *getAssociatedType(), getCtxI(), false)))
         return ChangeStatus::CHANGED;
+   #else
+      NewV = manifestReplacementValue(A, NewV, IP);
+      if (NewV && A.changeAfterManifest(getIRPosition(), *NewV))
+	return ChangeStatus::CHANGED;
+#endif
     }
     return ChangeStatus::UNCHANGED;
   }

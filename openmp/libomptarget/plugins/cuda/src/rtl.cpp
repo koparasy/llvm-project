@@ -1270,7 +1270,7 @@ public:
       uint64_t RedArg = CudaBlocksPerGrid;
       void *RedArgP = (void *)&RedArg;
       void **RedArgPtr = &RedArgP;
-      int NumRedThreads = CudaBlocksPerGrid > 128 ? 128 : CudaBlocksPerGrid;
+      int NumRedThreads = CudaBlocksPerGrid > 1024 ? 1024 : CudaBlocksPerGrid;
       INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
            "Launching reduction kernel %s with %d blocks and %d threads\n",
            (std::string(OffloadEntry->name) + "__red").c_str(), 1,
