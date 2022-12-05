@@ -15,6 +15,7 @@
 #define LLVM_FRONTEND_OPENMP_OMPIRBUILDER_H
 
 #include "llvm/Analysis/MemorySSAUpdater.h"
+#include "llvm/Frontend/OpenMP/OMP.h.inc"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/IRBuilder.h"
@@ -266,6 +267,16 @@ public:
   /// \param IndVar    is the induction variable usable at the insertion point.
   using LoopBodyGenCallbackTy =
       function_ref<void(InsertPointTy CodeGenIP, Value *IndVar)>;
+
+  /// Callback type for target workshare body code generation.
+  ///
+  /// \param CodeGenIP The insertion point to place the body code which should
+  ///                  form a single-entry-single-exit (SESE) region.
+  /// \param IndVar    The induction variable value for the loop iteration.
+  using TargetWorkshareBodyGenCallbackTy =
+      function_ref<void(InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
+                        BasicBlock& ContinuationBB, Value* IndVar, 
+                        std::pair<llvm::Function *, llvm::Value *> LoopVarClosure)>;
 
   /// Callback type for variable privatization (think copy & default
   /// constructor).
@@ -1048,10 +1059,16 @@ public:
   /// Helper that contains information about regions we need to outline
   /// during finalization.
   struct OutlineInfo {
+    OutlineInfo(StringRef Suffix, omp::Directive OMPD, bool IsCancellable)
+        : Suffix(Suffix), OMPD(OMPD), IsCancellable(IsCancellable) {}
+    std::string Suffix;
+    omp::Directive OMPD;
+    bool IsCancellable;
+
     using PostOutlineCBTy = std::function<void(Function &)>;
     PostOutlineCBTy PostOutlineCB;
     BasicBlock *EntryBB, *ExitBB, *OuterAllocaBB;
-    SmallVector<Value *, 2> ExcludeArgsFromAggregate;
+    SmallPtrSet<Value *, 2> ExcludeArgsFromAggregate;
 
     /// Collect all blocks in between EntryBB and ExitBB in both the given
     /// vector and set.
@@ -1071,6 +1088,14 @@ public:
 
   /// Add a new region that will be outlined later.
   void addOutlineInfo(OutlineInfo &&OI) { OutlineInfos.emplace_back(OI); }
+
+  void prepareOutlineRegion(OutlineInfo &OI, BodyGenCallbackTy BodyGenCB,
+                            PrivatizeCallbackTy PrivCB,
+                            FinalizeCallbackTy FiniCB,
+                            InsertPointTy InnerAllocaIP,
+                            InsertPointTy CodeGenIP, BasicBlock &FiniBB,
+                            Value *PrivTID);
+
 
   /// An ordered map of auto-generated variables to their unique names.
   /// It stores variables with the following names: 1) ".gomp_critical_user_" +
@@ -1454,6 +1479,25 @@ public:
   /// \param Loc The insert and source location description.
   /// \param IsSPMD Flag to indicate if the kernel is an SPMD kernel or not.
   void createTargetDeinit(const LocationDescription &Loc, bool IsSPMD);
+
+  /// Create a runtime call for a target/device workshare loop (for, distribute,
+  /// distrbute [parallel] for).
+  ///
+  /// \param Loc The insert and source location description.
+  /// \param OMPD Directive that was used.
+  /// \param BodyGenCB Callback that will generate the loop body SESE-region.
+  /// \param PrivCB Callback to copy a given variable (think copy constructor).
+  /// \param FiniCB Callback to finalize variable copies.
+  /// \param NumThreads The evaluated 'num_threads' clause expression, if any.
+  InsertPointTy createTargetWorkshareLoop(const LocationDescription &Loc,
+                                 omp::Directive OMPD,
+                                 InsertPointTy OuterAllocaBB,
+                                 TargetWorkshareBodyGenCallbackTy BodyGenCB,
+                                 PrivatizeCallbackTy PrivCB,
+                                 FinalizeCallbackTy FiniCB, Value *NumThreads,
+                                 bool IsCancellable);
+
+
 
   struct TargetReductionValueInfo {
     Value *Priv;

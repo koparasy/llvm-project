@@ -389,6 +389,7 @@ void CodeGenFunction::EmitStmt(const Stmt *S, ArrayRef<const Attr *> Attrs) {
         cast<OMPTargetTeamsDistributeDirective>(*S));
     break;
   case Stmt::OMPTargetTeamsDistributeParallelForDirectiveClass:
+    llvm::dbgs() << "Emit OMPTargetTeamsDistribute Directive\n";
     EmitOMPTargetTeamsDistributeParallelForDirective(
         cast<OMPTargetTeamsDistributeParallelForDirective>(*S));
     break;

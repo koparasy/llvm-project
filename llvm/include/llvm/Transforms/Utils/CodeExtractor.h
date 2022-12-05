@@ -128,10 +128,13 @@ public:
     /// Any new allocations will be placed in the AllocationBlock, unless
     /// it is null, in which case it will be placed in the entry block of
     /// the function from which the code is being extracted.
-    CodeExtractor(ArrayRef<BasicBlock *> BBs, DominatorTree *DT = nullptr,
-                  bool AggregateArgs = false, BlockFrequencyInfo *BFI = nullptr,
+    CodeExtractor(ArrayRef<BasicBlock *> BBs, 
+                  DominatorTree *DT = nullptr,
+                  bool AggregateArgs = false,
+                  BlockFrequencyInfo *BFI = nullptr,
                   BranchProbabilityInfo *BPI = nullptr,
-                  AssumptionCache *AC = nullptr, bool AllowVarArgs = false,
+                  AssumptionCache *AC = nullptr,
+                  bool AllowVarArgs = false,
                   bool AllowAlloca = false,
                   BasicBlock *AllocationBlock = nullptr,
                   std::string Suffix = "");
