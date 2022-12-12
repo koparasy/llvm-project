@@ -203,9 +203,13 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
   // empty set if we encounter invalid blocks.
   for (BasicBlock *BB : BBs) {
     // If this block is dead, don't process it.
-    if (DT && !DT->isReachableFromEntry(BB))
+    if (DT && !DT->isReachableFromEntry(BB)){
+      llvm::dbgs() << "Skipping block\n";
       continue;
+    }
 
+    llvm::dbgs () << "Not skipping block\n";
+  
     if (!Result.insert(BB))
       llvm_unreachable("Repeated basic blocks in extraction input");
   }
@@ -220,21 +224,25 @@ buildExtractionBlockSet(ArrayRef<BasicBlock *> BBs, DominatorTree *DT,
     // Make sure that the first block is not a landing pad.
     if (BB == Result.front()) {
       if (BB->isEHPad()) {
-        LLVM_DEBUG(dbgs() << "The first block cannot be an unwind block\n");
+        dbgs() << "The first block cannot be an unwind block\n";
         return {};
       }
       continue;
     }
-
+    
+    int count = 0;
     // All blocks other than the first must not have predecessors outside of
     // the subgraph which is being extracted.
     for (auto *PBB : predecessors(BB))
       if (!Result.count(PBB)) {
-        LLVM_DEBUG(dbgs() << "No blocks in this region may have entries from "
+        dbgs() << "No blocks in this region may have entries from "
                              "outside the region except for the first block!\n"
                           << "Problematic source BB: " << BB->getName() << "\n"
                           << "Problematic destination BB: " << PBB->getName()
-                          << "\n");
+                          << "\n";
+        BB->dump();
+        dbgs() << "Predecessor\n";
+        PBB->dump();
         return {};
       }
   }
@@ -286,6 +294,7 @@ static bool definedInCaller(const SetVector<BasicBlock *> &Blocks, Value *V) {
 
 static BasicBlock *getCommonExitBlock(const SetVector<BasicBlock *> &Blocks) {
   BasicBlock *CommonExitBlock = nullptr;
+  dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
   auto hasNonCommonExitSucc = [&](BasicBlock *Block) {
     for (auto *Succ : successors(Block)) {
       // Internal edges, ok.
@@ -300,6 +309,7 @@ static BasicBlock *getCommonExitBlock(const SetVector<BasicBlock *> &Blocks) {
     }
     return false;
   };
+  dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
 
   if (any_of(Blocks, hasNonCommonExitSucc))
     return nullptr;
@@ -494,8 +504,12 @@ CodeExtractor::getLifetimeMarkers(const CodeExtractorAnalysisCache &CEAC,
 void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
                                 ValueSet &SinkCands, ValueSet &HoistCands,
                                 BasicBlock *&ExitBlock) const {
+  dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
+  dbgs() << "Block is : " << Blocks.size() << "\n";
+  (*Blocks.begin())->dump();
   Function *Func = (*Blocks.begin())->getParent();
   ExitBlock = getCommonExitBlock(Blocks);
+  dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
 
   auto moveOrIgnoreLifetimeMarkers =
       [&](const LifetimeMarkerInfo &LMI) -> bool {
@@ -513,18 +527,21 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
     return true;
   };
 
+  dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
   // Look up allocas in the original function in CodeExtractorAnalysisCache, as
   // this is much faster than walking all the instructions.
   for (AllocaInst *AI : CEAC.getAllocas()) {
     BasicBlock *BB = AI->getParent();
     if (Blocks.count(BB))
       continue;
+    dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
 
     // As a prior call to extractCodeRegion() may have shrinkwrapped the alloca,
     // check whether it is actually still in the original function.
     Function *AIFunc = BB->getParent();
     if (AIFunc != Func)
       continue;
+    dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
 
     LifetimeMarkerInfo MarkerInfo = getLifetimeMarkers(CEAC, AI, ExitBlock);
     bool Moved = moveOrIgnoreLifetimeMarkers(MarkerInfo);
@@ -546,6 +563,7 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
       if (U->stripInBoundsConstantOffsets() != AI)
         continue;
 
+      dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
       Instruction *Bitcast = cast<Instruction>(U);
       for (User *BU : Bitcast->users()) {
         IntrinsicInst *IntrInst = dyn_cast<IntrinsicInst>(BU);
@@ -565,6 +583,7 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
       }
     }
 
+    dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
     for (Instruction *I : LifetimeBitcastUsers) {
       Module *M = AIFunc->getParent();
       LLVMContext &Ctx = M->getContext();
@@ -577,6 +596,7 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
     // Follow any bitcasts.
     SmallVector<Instruction *, 2> Bitcasts;
     SmallVector<LifetimeMarkerInfo, 2> BitcastLifetimeInfo;
+    dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
     for (User *U : AI->users()) {
       if (U->stripInBoundsConstantOffsets() == AI) {
         Instruction *Bitcast = cast<Instruction>(U);
@@ -599,11 +619,13 @@ void CodeExtractor::findAllocas(const CodeExtractorAnalysisCache &CEAC,
     if (Bitcasts.empty())
       continue;
 
+    dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
     LLVM_DEBUG(dbgs() << "Sinking alloca (via bitcast): " << *AI << "\n");
     SinkCands.insert(AI);
     for (unsigned I = 0, E = Bitcasts.size(); I != E; ++I) {
       Instruction *BitcastAddr = Bitcasts[I];
       const LifetimeMarkerInfo &LMI = BitcastLifetimeInfo[I];
+      dbgs() << "[ " << __FILE__ << " ] I have reached line : " << __LINE__ << "\n";
       assert(LMI.LifeStart &&
              "Unsafe to sink bitcast without lifetime markers");
       moveOrIgnoreLifetimeMarkers(LMI);

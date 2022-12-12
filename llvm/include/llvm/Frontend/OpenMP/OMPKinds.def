@@ -214,7 +214,7 @@ __ICV_RT_GET(proc_bind, omp_get_proc_bind)
 #define __OMP_RTL(Name, IsVarArg, ReturnType, ...)                             \
   OMP_RTL(OMPRTL_##Name, #Name, IsVarArg, ReturnType, __VA_ARGS__)
 
-
+__OMP_RTL(__kmpc_test_distribute, false, Void, IdentPtr, VoidPtr, Int64, VoidPtrPtr) 
 
 __OMP_RTL(__kmpc_barrier, false, Void, IdentPtr, Int32)
 __OMP_RTL(__kmpc_cancel, false, Int32, IdentPtr, Int32, Int32)

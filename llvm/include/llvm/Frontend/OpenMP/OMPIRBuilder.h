@@ -1068,7 +1068,7 @@ public:
     using PostOutlineCBTy = std::function<void(Function &)>;
     PostOutlineCBTy PostOutlineCB;
     BasicBlock *EntryBB, *ExitBB, *OuterAllocaBB;
-    SmallPtrSet<Value *, 2> ExcludeArgsFromAggregate;
+    SmallVector<Value *, 2> ExcludeArgsFromAggregate;
 
     /// Collect all blocks in between EntryBB and ExitBB in both the given
     /// vector and set.
@@ -1480,6 +1480,7 @@ public:
   /// \param IsSPMD Flag to indicate if the kernel is an SPMD kernel or not.
   void createTargetDeinit(const LocationDescription &Loc, bool IsSPMD);
 
+  using EmittedClosureTy = std::pair<llvm::Function *, llvm::Value *>;
   /// Create a runtime call for a target/device workshare loop (for, distribute,
   /// distrbute [parallel] for).
   ///
@@ -1495,7 +1496,8 @@ public:
                                  TargetWorkshareBodyGenCallbackTy BodyGenCB,
                                  PrivatizeCallbackTy PrivCB,
                                  FinalizeCallbackTy FiniCB, Value *NumThreads,
-                                 bool IsCancellable);
+                                 bool IsCancellable,
+                                 std::function<std::tuple<Value*,EmittedClosureTy>(InsertPointTy)>  DistanceCB);
 
 
 

@@ -5626,25 +5626,26 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
       return std::make_tuple(DistVal, LoopVarClosure);
   };
 
+  /*
   auto LoopVarCB = [this, CL](InsertPointTy InnerAlloca, llvm::Value *IndVar) {
-    //Builder.restoreIP(InnerAlloca);
-    //const auto *For = dyn_cast<ForStmt>(CL->getLoopStmt());
-    //if (const Stmt *InitStmt = For->getInit()) {
-    //  InitStmt->dump();
-    //  EmitStmt(InitStmt);
-    //}
+    Builder.restoreIP(InnerAlloca);
+    const auto *For = dyn_cast<ForStmt>(CL->getLoopStmt());
+    if (const Stmt *InitStmt = For->getInit()) {
+      InitStmt->dump();
+      EmitStmt(InitStmt);
+    }
 
-    //const CapturedStmt *LoopVarFunc = CL->getLoopVarFunc();
-    //printf("loopvarfunc\n");
-    //LoopVarFunc->dump();
-    //EmittedClosureTy LoopVarClosure = emitCapturedStmtFunc(*this, LoopVarFunc);
+    const CapturedStmt *LoopVarFunc = CL->getLoopVarFunc();
+    printf("loopvarfunc\n");
+    LoopVarFunc->dump();
+    EmittedClosureTy LoopVarClosure = emitCapturedStmtFunc(*this, LoopVarFunc);
 
-    //const DeclRefExpr *LoopVarRef = CL->getLoopVarRef();
-    //LValue LCVal = EmitLValue(LoopVarRef);
-    //Address LoopVarAddress = LCVal.getAddress(*this);
-    //emitCapturedStmtCall(*this, LoopVarClosure,
-    //                    {LoopVarAddress.getPointer(), IndVar});
+    const DeclRefExpr *LoopVarRef = CL->getLoopVarRef();
+    LValue LCVal = EmitLValue(LoopVarRef);
+    Address LoopVarAddress = LCVal.getAddress(*this);
+    emitCapturedStmtCall(*this, LoopVarClosure, {LoopVarAddress.getPointer(), IndVar});
   };
+  */
 
   auto FiniCB = [this](InsertPointTy IP) {
     llvm::dbgs() << "Emit Finalize OMP\n";
@@ -5657,20 +5658,22 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
           llvm::BasicBlock &ContinuationBB, llvm::Value *IndVar, EmittedClosureTy LoopVarClosure) {
       llvm::dbgs() << "Body Generation \n";
 
+        llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       OMPBuilderCBHelpers::OutlinedRegionBodyRAII ORB(*this, AllocaIP,
                                                       ContinuationBB);
 
+        llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       llvm::BasicBlock *CodeGenIPBB = CodeGenIP.getBlock();
       if (llvm::Instruction *CodeGenIPBBTI = CodeGenIPBB->getTerminator())
         CodeGenIPBBTI->eraseFromParent();
       Builder.SetInsertPoint(CodeGenIPBB);
+      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
 
       const DeclRefExpr *LoopVarRef = CL->getLoopVarRef();
       LValue LCVal = EmitLValue(LoopVarRef);
       Address LoopVarAddress = LCVal.getAddress(*this);
 
-      printf("LoopVarRef:\n");
-      llvm::dbgs () << "LoopVar Ref:\n";
+      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       LoopVarRef->dump();
       //Address OMPIVAddr = GetAddrOfLocalVar(IndVar);
       //llvm::Value * OMPIVL = Builder.CreateLoad(OMPIVAddr, "omp.iv.loaded");
@@ -5679,8 +5682,10 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
       //  Builder.CreateLoad(Int32Ty, IndVar, "omp.iv.loaded");
 
       //llvm::dbgs() << "omp.iv.load = " << *OMPIVL << "\n";
+      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       emitCapturedStmtCall(*this, LoopVarClosure,
                            {LoopVarAddress.getPointer(), IndVar});
+      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
 
 //      OMPBuilderCBHelpers::EmitOMPRegionBody(*this, loopBody,
 //      CodeGenIP, ContinuationBB);
@@ -5706,7 +5711,7 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
   CGCapturedStmtInfo CGSI(*CS, CR_OpenMP);
   CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(*this, &CGSI);
   llvm::OpenMPIRBuilder::InsertPointTy AllocaIP(AllocaInsertPt->getParent(), AllocaInsertPt->getIterator());
-  printf("I've made it to createDistribute\n");
+  llvm::dbgs() << "Create Target Workshare Loop\n";
   Builder.restoreIP(
       OMPBuilder.createTargetWorkshareLoop( Builder, 
                                            llvm::omp::OMPD_distribute,
@@ -5715,7 +5720,9 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
                                            PrivCB, 
                                            FiniCB, 
                                            NumThreads,
-                                           false));
+                                           false, 
+                                           DistanceCB));
+  llvm::dbgs() << "Finished Target Workshare Loop\n";
   return;
 
 
