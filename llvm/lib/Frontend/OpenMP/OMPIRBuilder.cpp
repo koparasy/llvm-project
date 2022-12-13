@@ -1404,8 +1404,13 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
     // Add some known attributes.
     OutlinedFn.addFnAttr(Attribute::NoUnwind);
     OutlinedFn.addFnAttr(Attribute::NoRecurse);
+
+    llvm::dbgs() << "Argument Size is " << OutlinedFn.arg_size() << "\n";
+    llvm::dbgs() << "\n";
+    OutlinedFn.dump();
+    llvm::dbgs() << "\n";
    
-    assert(OutlinedFn.arg_size() == 2 &&
+    assert(OutlinedFn.arg_size() == 3 &&
            "Expected omp.iv & structArg as arguments");
 
     CallInst *CI = cast<CallInst>(OutlinedFn.user_back());
@@ -1437,8 +1442,8 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
     Builder.CreateStore(OutlinedAI, PrivTIDAddr);
     CI->eraseFromParent();
 
-    for (Instruction *I : ToBeDeleted)
-      I->eraseFromParent();
+//    for (Instruction *I : ToBeDeleted)
+//      I->eraseFromParent();
   };
 
   // Adjust the finalization stack, verify the adjustment, and call the

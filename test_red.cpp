@@ -7,7 +7,8 @@ int main (int argc, char *argv[])
   long Elements = std::atol(argv[1]) * 1024L;
   DTYPE  *Data = new DTYPE[Elements];
 
-#pragma omp target teams distribute parallel for map(tofrom:Data[:Elements])
+#pragma omp target map(tofrom:Data[:Elements])
+#pragma omp teams distribute parallel for 
   for (long I = 0 ; I < Elements; I++)
     Data[I] = I - (Elements / 2);
 
