@@ -5591,30 +5591,22 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
   using InsertPointTy = llvm::OpenMPIRBuilder::InsertPointTy;
   auto DistanceCB = [this, CL](InsertPointTy OuterAlloca) -> std::tuple<llvm::Value*,EmittedClosureTy> {
     Builder.restoreIP(OuterAlloca);
-    llvm::dbgs() << "Dumping Distance (Canonical Loop)\n";
-    CL->dump();
-    llvm::dbgs () << "Finished dumping Distance";
 
     const auto *For = dyn_cast<ForStmt>(CL->getLoopStmt());
-    if (const Stmt *InitStmt = For->getInit()) {
-      llvm::dbgs() << "Dump InitStmt\n";
-      InitStmt->dump();
-      llvm::dbgs() << "Init Stmt:\n";
+    if (const Stmt *InitStmt = For->getInit())
       EmitStmt(InitStmt);
-    }
 
     // Emit closure for later use. By-value captures will be captured here.
     const CapturedStmt *DistanceFunc = CL->getDistanceFunc();
-    llvm::dbgs() << "Distance Func is :\n";
-    DistanceFunc->dump();
-    llvm::dbgs() << "Emit Distance:\n";
     EmittedClosureTy DistanceClosure = emitCapturedStmtFunc(*this, DistanceFunc);
+    llvm::dbgs() << "DistanceClosure\n";
+    DistanceClosure.first->dump();
 
-    llvm::dbgs() << "Loop Var Function:\n";
     const CapturedStmt *LoopVarFunc = CL->getLoopVarFunc();
-    LoopVarFunc->dump();
-    llvm::dbgs() << "Emit LoopVar Func\n";
     EmittedClosureTy LoopVarClosure = emitCapturedStmtFunc(*this, LoopVarFunc);
+
+    llvm::dbgs() << "LoopVarClosure\n";
+    LoopVarClosure.first->dump();
 
     QualType LogicalTy = DistanceFunc->getCapturedDecl()
       ->getParam(0)

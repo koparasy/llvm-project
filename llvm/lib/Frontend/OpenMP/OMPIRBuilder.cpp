@@ -1222,13 +1222,10 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
     FinalizeCallbackTy FiniCB, 
     Value *NumThreads, bool IsCancellable,
     std::function<std::tuple<Value*,EmittedClosureTy>(InsertPointTy)> DistanceCB) {
-  
   using EmittedClosureTy = std::pair<llvm::Function *, llvm::Value *>;
 
   if (!updateToLocation(Loc))
     return Loc.IP;
-
-  dbgs() << "Starting createWorkshareLoop\n";
 
   uint32_t SrcLocStrSize;
   Constant *SrcLocStr = getOrCreateSrcLocStr(Loc, SrcLocStrSize);
@@ -1238,7 +1235,6 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   BasicBlock *InsertBB = Builder.GetInsertBlock();
   Function *OuterFn = InsertBB->getParent();
 
-  dbgs() << "InsertBB:\n";
   dbgs() << "------------------------------------------\n";
   InsertBB->dump();
   dbgs() << "------------------------------------------\n";
@@ -1259,6 +1255,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   // Create an artificial insertion point that will also ensure the blocks we
   // are about to split are not degenerated.
   auto *UI = new UnreachableInst(Builder.getContext(), InsertBB);
+  llvm::dbgs() << "After UI Dbgs:\n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
 
   Instruction *ThenTI = UI, *ElseTI = nullptr;
 
@@ -1271,7 +1272,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
       PRegBodyBB->splitBasicBlock(ThenTI, "omp.loop.pre_finalize");
   BasicBlock *PRegExitBB =
       PRegPreFiniBB->splitBasicBlock(ThenTI, "omp.loop.exit");
-  dbgs() << "I have reached line : " << __LINE__ << "\n";
+
+  llvm::dbgs() << "After Creating blocks\n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
 
   auto FiniCBWrapper = [&](InsertPointTy IP) {
     // Hide "open-ended" blocks from the given FiniCB by setting the right jump
@@ -1303,12 +1308,16 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   if(is32Bit) {
     DistVal = Builder.CreateIntCast(DistVal, Int64, false);
   }
+
+  llvm::dbgs() << "After Distance calculation \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
+
   EmittedClosureTy LoopVarClosure = std::get<1>(DistanceOutput);
 
-  dbgs() << "After DistanceCB: " << *OuterFn << "\n";
-  dbgs() << "Distance variable: " << *DistVal << "\n";
-
-   // Create the virtual iteration variable that will be pulled into
+  // Create the virtual iteration variable that will be pulled into
   // the outlined function.
   //Builder.restoreIP(OuterAllocaIP);
   AllocaInst *OMPIV = Builder.CreateAlloca(Int64, nullptr, "omp.iv.tmp");
