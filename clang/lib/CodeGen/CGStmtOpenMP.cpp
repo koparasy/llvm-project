@@ -5648,25 +5648,19 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
 
   auto BodyGenCB = [loopBody, this, CL](InsertPointTy AllocaIP, InsertPointTy CodeGenIP,
           llvm::BasicBlock &ContinuationBB, llvm::Value *IndVar, EmittedClosureTy LoopVarClosure) {
-      llvm::dbgs() << "Body Generation \n";
-
-        llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       OMPBuilderCBHelpers::OutlinedRegionBodyRAII ORB(*this, AllocaIP,
                                                       ContinuationBB);
-
-        llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       llvm::BasicBlock *CodeGenIPBB = CodeGenIP.getBlock();
-      if (llvm::Instruction *CodeGenIPBBTI = CodeGenIPBB->getTerminator())
-        CodeGenIPBBTI->eraseFromParent();
-      Builder.SetInsertPoint(CodeGenIPBB);
-      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
+//      if (llvm::Instruction *CodeGenIPBBTI = CodeGenIPBB->getTerminator()){
+//        llvm::dbgs() << *CodeGenIPBBTI << "\n";
+//        CodeGenIPBBTI->eraseFromParent();
+//      }
+      Builder.SetInsertPoint(CodeGenIPBB, CodeGenIPBB->begin());
 
       const DeclRefExpr *LoopVarRef = CL->getLoopVarRef();
       LValue LCVal = EmitLValue(LoopVarRef);
       Address LoopVarAddress = LCVal.getAddress(*this);
 
-      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
-      LoopVarRef->dump();
       //Address OMPIVAddr = GetAddrOfLocalVar(IndVar);
       //llvm::Value * OMPIVL = Builder.CreateLoad(OMPIVAddr, "omp.iv.loaded");
 
@@ -5674,13 +5668,14 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
       //  Builder.CreateLoad(Int32Ty, IndVar, "omp.iv.loaded");
 
       //llvm::dbgs() << "omp.iv.load = " << *OMPIVL << "\n";
-      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
       emitCapturedStmtCall(*this, LoopVarClosure,
                            {LoopVarAddress.getPointer(), IndVar});
-      llvm::dbgs() << "[BodyGenCB] I have reached line : " << __LINE__ << "\n";
-
-//      OMPBuilderCBHelpers::EmitOMPRegionBody(*this, loopBody,
-//      CodeGenIP, ContinuationBB);
+      
+//      llvm::dbgs() << "Loop Body is:";
+//      loopBody->dump();
+//      InsertPointTy Cont(&ContinuationBB, ContinuationBB.end());
+//      OMPBuilderCBHelpers::EmitOMPInlinedRegionBody(*this, loopBody,
+//                      CodeGenIP, Cont, "loop_body");
     };
 
   llvm::Value *NumThreads = nullptr;

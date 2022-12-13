@@ -1314,7 +1314,6 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   InsertBB->getParent()->dump();
   dbgs() << "------------------------------------------\n";
 
-
   EmittedClosureTy LoopVarClosure = std::get<1>(DistanceOutput);
 
   // Create the virtual iteration variable that will be pulled into
@@ -1346,6 +1345,12 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   ToBeDeleted.push_back(OMPIVUse); 
   ToBeDeleted.push_back(OMPIV);
 
+  llvm::dbgs() << "Creation of IVs: \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
+
     // ThenBB
   //   |
   //   V
@@ -1363,8 +1368,17 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
 
   assert(BodyGenCB && "Expected body generation callback!");
   InsertPointTy CodeGenIP(PRegBodyBB, PRegBodyBB->begin());
+  llvm::dbgs() << "Creation of IVs: \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
 
   BodyGenCB(InnerAllocaIP, CodeGenIP, *PRegPreFiniBB, OMPIVCasted, LoopVarClosure);
+
+  llvm::dbgs() << "After Body Generation calculation \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
 
   FunctionCallee RTLFn = getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_test_distribute);
   if (auto *F = dyn_cast<llvm::Function>(RTLFn.getCallee())) {
@@ -1440,6 +1454,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   InsertPointTy PreFiniIP(PRegPreFiniBB, PRegPreFiniTI->getIterator());
   FiniCB(PreFiniIP);
 
+  llvm::dbgs() << "After Adding Finalization \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
   OI.EntryBB = PRegEntryBB;
   OI.ExitBB = PRegExitBB;
 
@@ -1451,11 +1470,14 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   // We might have multiple incoming edges to the exit now due to finalizations,
   // e.g., cancel calls that cause the control flow to leave the region.
   BasicBlock *PRegOutlinedExitBB = PRegExitBB;
-  PRegOutlinedExitBB->dump();
   PRegExitBB = SplitBlock(PRegExitBB, &*PRegExitBB->getFirstInsertionPt());
-  PRegExitBB->dump();
   PRegOutlinedExitBB->setName("omp.dis.outlined.exit");
   Blocks.push_back(PRegOutlinedExitBB);
+
+  llvm::dbgs() << "After Adding Finalization \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
 
   CodeExtractorAnalysisCache CEAC(*OuterFn);
   CodeExtractor Extractor(Blocks, 
@@ -1549,7 +1571,6 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
       OuterAllocaBlock, 
       OuterAllocaBlock->getFirstInsertionPt());
 
-  dbgs() << "I have reached line : " << __LINE__ << "\n";
   for (Value *Input : Inputs) {
     PrivHelper(*Input);
   }
@@ -1557,21 +1578,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   assert(Outputs.empty() &&
          "OpenMP outlining should not produce live-out values!");
 
-  dbgs() << "After  privatization: " << *OuterFn << "\n";
-  for (auto *BB : Blocks) {
-    dbgs() << " PBR: " << BB->getName() << "\n";
-  }
-
-  dbgs() << "I have reached line : " << __LINE__ << "\n";
   // Register the outlined info.
   addOutlineInfo(std::move(OI));
 
   InsertPointTy AfterIP(UI->getParent(), UI->getParent()->end());
   UI->eraseFromParent();
-
-  dbgs() << "createWorkshareLoop is done\n";
-
-  llvm::dbgs() << "OuterAllocaBlock\n" << *OuterAllocaBlock << "\n";
 
   return AfterIP;
 }
