@@ -5853,7 +5853,9 @@ void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,
                                  InnerKind != OMPD_critical &&
                                      InnerKind != OMPD_master &&
                                      InnerKind != OMPD_masked);
+  llvm::dbgs() << "Here Emitting Capture\n";
   CGF.CapturedStmtInfo->EmitBody(CGF, /*S=*/nullptr);
+  llvm::dbgs() << "End\n";
 }
 
 namespace {

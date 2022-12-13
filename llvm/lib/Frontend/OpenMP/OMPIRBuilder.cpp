@@ -1498,6 +1498,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   Extractor.findAllocas(CEAC, SinkingCands, HoistingCands, CommonExit);
   Extractor.findInputsOutputs(Inputs, Outputs, SinkingCands);
 
+  llvm::dbgs() << "After Adding Finalization \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
   FunctionCallee TIDRTLFn =
       getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_global_thread_num);
 
@@ -1556,6 +1561,11 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
       UPtr->set(ReplacementValue);
   };
 
+  llvm::dbgs() << "1564 \n";
+  dbgs() << "------------------------------------------\n";
+  InsertBB->getParent()->dump();
+  dbgs() << "------------------------------------------\n";
+
   // Reset the inner alloca insertion as it will be used for loading the values
   // wrapped into pointers before passing them into the to-be-outlined region.
   // Configure it to insert immediately after the fake use of zero address so
@@ -1572,6 +1582,10 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
       OuterAllocaBlock->getFirstInsertionPt());
 
   for (Value *Input : Inputs) {
+    llvm::dbgs() << "1585 \n";
+    dbgs() << "------------------------------------------\n";
+    InsertBB->getParent()->dump();
+    dbgs() << "------------------------------------------\n";
     PrivHelper(*Input);
   }
 
