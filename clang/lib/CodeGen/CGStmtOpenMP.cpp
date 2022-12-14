@@ -5673,9 +5673,9 @@ void CodeGenFunction::EmitOMPDistributeLoop(const OMPLoopDirective &S,
       
 //      llvm::dbgs() << "Loop Body is:";
 //      loopBody->dump();
-//      InsertPointTy Cont(&ContinuationBB, ContinuationBB.end());
-//      OMPBuilderCBHelpers::EmitOMPInlinedRegionBody(*this, loopBody,
-//                      CodeGenIP, Cont, "loop_body");
+      InsertPointTy Cont(&ContinuationBB, ContinuationBB.end());
+      OMPBuilderCBHelpers::EmitOMPInlinedRegionBody(*this, loopBody,
+                                    AllocaIP, CodeGenIP, "loop_body");
     };
 
   llvm::Value *NumThreads = nullptr;

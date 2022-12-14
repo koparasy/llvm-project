@@ -1410,8 +1410,8 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
     OutlinedFn.dump();
     llvm::dbgs() << "\n";
    
-    assert(OutlinedFn.arg_size() == 3 &&
-           "Expected omp.iv & structArg as arguments");
+//    assert(OutlinedFn.arg_size() == 3 &&
+//           "Expected omp.iv & structArg as arguments");
 
     CallInst *CI = cast<CallInst>(OutlinedFn.user_back());
     CI->getParent()->setName("omp_loop");
