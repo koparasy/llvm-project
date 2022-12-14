@@ -1380,7 +1380,7 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
   InsertBB->getParent()->dump();
   dbgs() << "------------------------------------------\n";
 
-  FunctionCallee RTLFn = getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_test_distribute);
+  FunctionCallee RTLFn = getOrCreateRuntimeFunctionPtr(OMPRTL___kmpc_distribute_for_static_loop_8);
   if (auto *F = dyn_cast<llvm::Function>(RTLFn.getCallee())) {
     dbgs() << "RTLFn\n" << *F << "\n";
     if (!F->hasMetadata(llvm::LLVMContext::MD_callback)) {
@@ -1395,7 +1395,7 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
           llvm::LLVMContext::MD_callback,
           *llvm::MDNode::get(
               Ctx, {MDB.createCallbackEncoding(2, {-1, -1},
-                                               /* VarArgsArePassed */ false)}));
+                   /* VarArgsArePassed */ false)}));
     }
   }
 
@@ -1424,11 +1424,20 @@ IRBuilder<>::InsertPoint  OpenMPIRBuilder::createTargetWorkshareLoop(
         Ident,
         Builder.CreateBitCast(&OutlinedFn, Int8Ptr),
         DistVal,
-        Builder.CreateCast(Instruction::BitCast, StructArg, Int8PtrPtr)};
-
+        Builder.CreateCast(Instruction::BitCast, StructArg, Int8PtrPtr),
+        ConstantInt::get(Builder.getInt64Ty(), 0),
+        ConstantInt::get(Builder.getInt64Ty(), 0), //Block Chunk 
+        ConstantInt::get(Builder.getInt64Ty(), 0) }; // Thread Chunk 
+    //
     SmallVector<Value *, 16> RealArgs;
     RealArgs.append(std::begin(ForkCallArgs), 
                     std::end(ForkCallArgs));
+
+    llvm ::dbgs () << "Arguments are \n";
+    int count = 0;
+    for ( auto *Arg : RealArgs ) {
+      llvm::dbgs() << "Count:" << count ++ << " " << *Arg << "\n";
+    }
 
     Builder.CreateCall(RTLFn, RealArgs);
 

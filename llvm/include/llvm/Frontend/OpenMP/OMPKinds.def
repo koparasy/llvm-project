@@ -215,13 +215,10 @@ __ICV_RT_GET(proc_bind, omp_get_proc_bind)
   OMP_RTL(OMPRTL_##Name, #Name, IsVarArg, ReturnType, __VA_ARGS__)
 
 __OMP_RTL(__kmpc_test_distribute, false, Void, IdentPtr, VoidPtr, Int64, VoidPtrPtr)
-__OMP_RTL(__kmpc_distribute_for_static_loop_4,  false, Void, IdentPtr, VoidPtr, VoitPtr, Int32, Int32, Int32, Int32)
-__OMP_RTL(__kmpc_distribute_for_static_loop_4u, false, Void, IdentPtr, VoidPtr, VoitPtr, Int32, Int32, Int32, Int32)
-__OMP_RTL(__kmpc_distribute_for_static_loop_8,  false, Void, IdentPtr, VoidPtr, VoitPtr, Int64, Int64, Int64, Int64)
-__OMP_RTL(__kmpc_distribute_for_static_loop_8u, false, Void, IdentPtr, VoidPtr, VoitPtr, Int64, Int64, Int64, Int64)
-
-__kmpc_distribute_for_static_loop##BW(IdentTy *loc, void (*fn)(TY, void *), void *arg, TY num_iters,           \
-      TY num_threads, TY block_chunk, TY thread_chunk)
+__OMP_RTL(__kmpc_distribute_for_static_loop_4,  false, Void, IdentPtr, VoidPtr, Int32, VoidPtrPtr, Int32, Int32, Int32)
+__OMP_RTL(__kmpc_distribute_for_static_loop_4u, false, Void, IdentPtr, VoidPtr, Int32, VoidPtrPtr, Int32, Int32, Int32)
+__OMP_RTL(__kmpc_distribute_for_static_loop_8,  false, Void, IdentPtr, VoidPtr, Int64, VoidPtrPtr, Int64, Int64, Int64)
+__OMP_RTL(__kmpc_distribute_for_static_loop_8u, false, Void, IdentPtr, VoidPtr, Int64, VoidPtrPtr, Int64, Int64, Int64)
 
 __OMP_RTL(__kmpc_barrier, false, Void, IdentPtr, Int32)
 __OMP_RTL(__kmpc_cancel, false, Int32, IdentPtr, Int32, Int32)
