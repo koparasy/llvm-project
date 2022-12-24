@@ -1834,31 +1834,47 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
         if (auto Err = synchronize(AsyncInfoWrapper))
           return Err;
 
-      hsa_status_t Status;
-      Status = hsa_amd_memory_lock(const_cast<void *>(HstPtr), Size, nullptr, 0,
-                                   &PinnedHstPtr);
-      if (auto Err =
-              Plugin::check(Status, "Error in hsa_amd_memory_lock: %s\n"))
-        return Err;
+      std::deque<std::pair<void *, AMDGPUSignalTy>> Signals;
+      const int64_t KB4 = 1024 * 4 * 1024;
+      while (Size) {
+        int64_t TransferSize = std::min(Size, KB4);
+        hsa_status_t Status;
+        Status = hsa_amd_memory_lock(const_cast<void *>(HstPtr), TransferSize,
+                                     nullptr, 0, &PinnedHstPtr);
+        if (auto Err =
+                Plugin::check(Status, "Error in hsa_amd_memory_lock: %s\n"))
+          return Err;
 
-      AMDGPUSignalTy Signal;
-      if (auto Err = Signal.init())
-        return Err;
+        auto &[CurHstPtr, Signal] = Signals.emplace_back();
+        if (auto Err = Signal.init())
+          return Err;
 
-      Status = hsa_amd_memory_async_copy(TgtPtr, Agent, PinnedHstPtr, Agent,
-                                         Size, 0, nullptr, Signal.get());
-      if (auto Err =
-              Plugin::check(Status, "Error in hsa_amd_memory_async_copy: %s"))
-        return Err;
+        CurHstPtr = const_cast<void *>(HstPtr);
+        Status =
+            hsa_amd_memory_async_copy(TgtPtr, Agent, PinnedHstPtr, Agent,
+                                      TransferSize, 0, nullptr, Signal.get());
+        if (auto Err =
+                Plugin::check(Status, "Error in hsa_amd_memory_async_copy: %s"))
+          return Err;
 
-      if (auto Err = Signal.wait())
-        return Err;
+        Size -= TransferSize;
+        TgtPtr = advanceVoidPtr(TgtPtr, TransferSize);
+        HstPtr = advanceVoidPtr(HstPtr, TransferSize);
+      }
 
-      if (auto Err = Signal.deinit())
-        return Err;
+      for (auto &[HstPtr, Signal] : Signals) {
+        if (auto Err = Signal.wait())
+          return Err;
 
-      Status = hsa_amd_memory_unlock(const_cast<void *>(HstPtr));
-      return Plugin::check(Status, "Error in hsa_amd_memory_unlock: %s\n");
+        if (auto Err = Signal.deinit())
+          return Err;
+
+        hsa_status_t Status = hsa_amd_memory_unlock(HstPtr);
+        if (auto Err =
+                Plugin::check(Status, "Error in hsa_amd_memory_unlock: %s\n"))
+          return Err;
+      }
+      return Plugin::success();
     }
 
     // Otherwise, use two-step copy with an intermediate pinned host buffer.
