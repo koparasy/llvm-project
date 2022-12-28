@@ -11,6 +11,7 @@
 #include "JIT.h"
 #include "Debug.h"
 
+#include "Utilities.h"
 #include "omptarget.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -39,6 +40,7 @@
 
 #include <list>
 #include <mutex>
+#include <system_error>
 
 using namespace llvm;
 using namespace llvm::object;
@@ -180,7 +182,9 @@ createTargetMachine(Module &M, Triple TT, std::string CPU, unsigned OptLevel) {
 class JITEngine {
 public:
   JITEngine(Triple::ArchType TA, std::string MCpu)
-      : TT(Triple::getArchTypeName(TA)), CPU(MCpu) {
+      : TT(Triple::getArchTypeName(TA)), CPU(MCpu),
+        PreOptIRBufferFileName("LIBOMPTARGET_JIT_PRE_OPT_IR_FILE"),
+        PostOptIRBufferFileName("LIBOMPTARGET_JIT_POST_OPT_IR_FILE") {
     std::call_once(InitFlag, init, TT);
   }
 
@@ -205,6 +209,10 @@ private:
   LLVMContext Context;
   const Triple TT;
   const std::string CPU;
+
+  /// Control environment variables.
+  target::StringEnvar PreOptIRBufferFileName;
+  target::StringEnvar PostOptIRBufferFileName;
 };
 
 void JITEngine::opt(TargetMachine *TM, TargetLibraryInfoImpl *TLII, Module &M,
@@ -266,7 +274,19 @@ Expected<std::unique_ptr<MemoryBuffer>> JITEngine::backend(Module &M,
   std::unique_ptr<TargetMachine> TM = std::move(*TMOrErr);
   TargetLibraryInfoImpl TLII(TT);
 
+  if (PreOptIRBufferFileName.isPresent()) {
+    std::error_code EC;
+    raw_fd_stream FD(PreOptIRBufferFileName.get(), EC);
+    M.print(FD, nullptr);
+  }
+
   opt(TM.get(), &TLII, M, OptLevel);
+
+  if (PostOptIRBufferFileName.isPresent()) {
+    std::error_code EC;
+    raw_fd_stream FD(PostOptIRBufferFileName.get(), EC);
+    M.print(FD, nullptr);
+  }
 
   // Prepare the output buffer and stream for codegen.
   SmallVector<char> CGOutputBuffer;
