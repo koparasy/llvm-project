@@ -120,7 +120,7 @@ static cl::opt<bool> PrintModuleBeforeOptimizations(
 static cl::opt<bool> AlwaysInlineDeviceFunctions(
     "openmp-opt-inline-device",
     cl::desc("Inline all applicible functions on the device."), cl::Hidden,
-    cl::init(false));
+    cl::init(true));
 
 static cl::opt<bool>
     EnableVerboseRemarks("openmp-opt-verbose-remarks",
@@ -130,7 +130,7 @@ static cl::opt<bool>
 static cl::opt<unsigned>
     SetFixpointIterations("openmp-opt-max-iterations", cl::Hidden,
                           cl::desc("Maximal number of attributor iterations."),
-                          cl::init(256));
+                          cl::init(256 * 256));
 
 static cl::opt<unsigned>
     SharedMemoryLimit("openmp-opt-shared-limit", cl::Hidden,
