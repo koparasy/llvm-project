@@ -229,7 +229,8 @@ void JITEngine::opt(TargetMachine *TM, TargetLibraryInfoImpl *TLII, Module &M,
   PB.registerLoopAnalyses(LAM);
   PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
 
-  MPM.addPass(PB.buildPerModuleDefaultPipeline(getOptLevel(OptLevel)));
+  if (OptLevel)
+    MPM.addPass(PB.buildPerModuleDefaultPipeline(getOptLevel(OptLevel)));
 
   MPM.run(M, MAM);
 }
