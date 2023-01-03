@@ -58,10 +58,11 @@ void init(Triple TT) {
     LLVMInitializeNVPTXTargetMC();
     LLVMInitializeNVPTXAsmPrinter();
   } else if (TT.isAMDGPU()) {
-    LLVMInitializeAMDGPUTargetInfo();
-    LLVMInitializeAMDGPUTarget();
-    LLVMInitializeAMDGPUTargetMC();
-    LLVMInitializeAMDGPUAsmPrinter();
+    FAILURE_MESSAGE("unsupported JIT target");
+    //LLVMInitializeAMDGPUTargetInfo();
+    //LLVMInitializeAMDGPUTarget();
+    //LLVMInitializeAMDGPUTargetMC();
+    //LLVMInitializeAMDGPUAsmPrinter();
   } else {
     FAILURE_MESSAGE("unsupported JIT target");
     abort();
