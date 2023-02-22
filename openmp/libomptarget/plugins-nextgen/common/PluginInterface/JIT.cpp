@@ -53,16 +53,16 @@ std::once_flag InitFlag;
 
 void init(Triple TT) {
   if (TT.isNVPTX()) {
-    LLVMInitializeNVPTXTargetInfo();
-    LLVMInitializeNVPTXTarget();
-    LLVMInitializeNVPTXTargetMC();
-    LLVMInitializeNVPTXAsmPrinter();
+    //LLVMInitializeNVPTXTargetInfo();
+    //LLVMInitializeNVPTXTarget();
+    //LLVMInitializeNVPTXTargetMC();
+    //LLVMInitializeNVPTXAsmPrinter();
   } else if (TT.isAMDGPU()) {
     FAILURE_MESSAGE("unsupported JIT target");
-    //LLVMInitializeAMDGPUTargetInfo();
-    //LLVMInitializeAMDGPUTarget();
-    //LLVMInitializeAMDGPUTargetMC();
-    //LLVMInitializeAMDGPUAsmPrinter();
+    LLVMInitializeAMDGPUTargetInfo();
+    LLVMInitializeAMDGPUTarget();
+    LLVMInitializeAMDGPUTargetMC();
+    LLVMInitializeAMDGPUAsmPrinter();
   } else {
     FAILURE_MESSAGE("unsupported JIT target");
     abort();
