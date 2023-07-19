@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "omptarget.h"
 #include "omptargetplugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/JSON.h"
@@ -117,18 +118,10 @@ int main(int argc, char **argv) {
   if (!DeviceMemoryMB)
     report_fatal_error("Error reading the kernel input device memory.");
 
-  setenv("LIBOMPTARGET_REPLAY", "1", 1);
-  if (VerifyOpt || SaveOutputOpt)
-    setenv("LIBOMPTARGET_RR_SAVE_OUTPUT", "1", 1);
-
   auto DeviceMemorySizeJson =
       JsonKernelInfo->getAsObject()->getInteger("DeviceMemorySize");
   // Set device memory size to the ceiling of GB granularity.
-  uint64_t DeviceMemorySize =
-      std::ceil(DeviceMemorySizeJson.value() / (1024.0 * 1024.0 * 1024.0));
-
-  setenv("LIBOMPTARGET_RR_DEVMEM_SIZE",
-         std::to_string(DeviceMemorySize).c_str(), 1);
+  uint64_t DeviceMemorySize = std::ceil(DeviceMemorySizeJson.value());
 
   auto DeviceIdJson = JsonKernelInfo->getAsObject()->getInteger("DeviceId");
   // TODO: Print warning if the user overrides the device id in the json file.
@@ -137,9 +130,13 @@ int main(int argc, char **argv) {
   // TODO: do we need requires?
   //__tgt_register_requires(/* Flags */1);
 
-  __tgt_init_all_rtls();
-
   __tgt_register_lib(&Desc);
+
+  int Rc = __tgt_activate_record_replay(DeviceId, DeviceMemorySize, false,
+                                        VerifyOpt);
+  if (Rc != OMP_TGT_SUCCESS) {
+    report_fatal_error("Cannot activate record replay\n");
+  }
 
   __tgt_target_kernel_replay(
       /* Loc */ nullptr, DeviceId, KernelEntry.addr,
