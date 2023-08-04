@@ -94,6 +94,10 @@ private:
     if (Err)
       report_fatal_error("Error retrieving data for target pointer");
 
+    Err = Device->synchronize(AsyncInfoWrapper);
+    if (Err)
+      report_fatal_error("Error retrieving data for target pointer");
+
     StringRef DeviceMemory(DeviceMemoryMB.get()->getBufferStart(), MemorySize);
     std::error_code EC;
     raw_fd_ostream OS(Filename, EC);
@@ -179,6 +183,9 @@ public:
            "Buffer over/under-filled.");
     assert(Size == getPtrDiff(BufferPtr, GlobalsMB->get()->getBufferStart()) &&
            "Buffer size mismatch");
+
+    if (auto Err = Device->synchronize(AsyncInfoWrapper))
+      report_fatal_error("Error retrieving data for target pointer");
 
     StringRef GlobalsMemory(GlobalsMB.get()->getBufferStart(), Size);
     std::error_code EC;
