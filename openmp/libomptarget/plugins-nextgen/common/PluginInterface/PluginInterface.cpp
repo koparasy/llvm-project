@@ -82,7 +82,7 @@ private:
     return Plugin::success();
   }
 
-  void dumpDeviceMemory(StringRef Filename){
+  void dumpDeviceMemory(StringRef Filename) {
     ErrorOr<std::unique_ptr<WritableMemoryBuffer>> DeviceMemoryMB =
         WritableMemoryBuffer::getNewUninitMemBuffer(MemorySize);
     if (!DeviceMemoryMB)
@@ -164,9 +164,8 @@ public:
 
       auto Err = Plugin::success();
       {
-        if (auto Err =
-                Device->dataRetrieve(BufferPtr, OffloadEntry.addr,
-                                     OffloadEntry.size, nullptr))
+        if (auto Err = Device->dataRetrieve(BufferPtr, OffloadEntry.addr,
+                                            OffloadEntry.size, nullptr))
           report_fatal_error("Error retrieving data for global");
       }
       if (Err)
@@ -188,7 +187,7 @@ public:
   void saveKernelInputInfo(const char *Name, DeviceImageTy &Image,
                            void **ArgPtrs, ptrdiff_t *ArgOffsets,
                            int32_t NumArgs, uint64_t NumTeamsClause,
-                           uint32_t ThreadLimitClause, uint64_t LoopTripCount){
+                           uint32_t ThreadLimitClause, uint64_t LoopTripCount) {
     json::Object JsonKernelInfo;
     JsonKernelInfo["Name"] = Name;
     JsonKernelInfo["NumArgs"] = NumArgs;
@@ -1130,7 +1129,8 @@ Error GenericDeviceTy::launchKernel(void *EntryPtr, void **ArgPtrs,
                                     ptrdiff_t *ArgOffsets,
                                     KernelArgsTy &KernelArgs,
                                     __tgt_async_info *AsyncInfo) {
-  AsyncInfoWrapperTy AsyncInfoWrapper(*this, RecordReplay.isRecordingOrReplaying() ? nullptr : AsyncInfo);
+  AsyncInfoWrapperTy AsyncInfoWrapper(
+      *this, RecordReplay.isRecordingOrReplaying() ? nullptr : AsyncInfo);
 
   GenericKernelTy &GenericKernel =
       *reinterpret_cast<GenericKernelTy *>(EntryPtr);

@@ -140,14 +140,15 @@ int main(int argc, char **argv) {
   if (!DeviceMemoryMB)
     report_fatal_error("Error reading the kernel input device memory.");
 
-  // On AMD for currently unknown reasons we cannot copy memory mapped data to device.
-  // This is a work-around.
+  // On AMD for currently unknown reasons we cannot copy memory mapped data to
+  // device. This is a work-around.
   uint8_t *recored_data = new uint8_t[DeviceMemoryMB.get()->getBufferSize()];
-  std::memcpy(recored_data, const_cast<char*>(DeviceMemoryMB.get()->getBuffer().data()), DeviceMemorySizeJson.value() * sizeof(uint8_t));
+  std::memcpy(recored_data,
+              const_cast<char *>(DeviceMemoryMB.get()->getBuffer().data()),
+              DeviceMemorySizeJson.value() * sizeof(uint8_t));
 
   __tgt_target_kernel_replay(
-      /* Loc */ nullptr, DeviceId, KernelEntry.addr,
-      (char *) recored_data,
+      /* Loc */ nullptr, DeviceId, KernelEntry.addr, (char *)recored_data,
       DeviceMemoryMB.get()->getBufferSize(), TgtArgs.data(),
       TgtArgOffsets.data(), NumArgs.value(), NumTeams, NumThreads,
       LoopTripCount.value());
@@ -176,7 +177,7 @@ int main(int argc, char **argv) {
                 "verify!\n";
   }
 
-  delete [] recored_data;
+  delete[] recored_data;
 
   // TODO: calling unregister lib causes plugin deinit error for nextgen
   // plugins.
