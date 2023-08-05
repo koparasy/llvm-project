@@ -291,7 +291,7 @@ Error GenericKernelTy::init(GenericDeviceTy &GenericDevice,
 
   ImagePtr = &Image;
 
-  PreferredNumThreads = getDefaultNumThreads(GenericDevice);
+  PreferredNumThreads = GenericDevice.getDefaultNumThreads();
 
   MaxNumThreads = GenericDevice.getThreadLimit();
 
