@@ -112,12 +112,6 @@ int main(int argc, char **argv) {
   Desc.HostEntriesEnd = &KernelEntry + 1;
   Desc.DeviceImages = &DeviceImage;
 
-  ErrorOr<std::unique_ptr<MemoryBuffer>> DeviceMemoryMB =
-      MemoryBuffer::getFile(KernelEntryName + ".memory", /* isText */ false,
-                            /* RequiresNullTerminator */ false);
-  if (!DeviceMemoryMB)
-    report_fatal_error("Error reading the kernel input device memory.");
-
   auto DeviceMemorySizeJson =
       JsonKernelInfo->getAsObject()->getInteger("DeviceMemorySize");
   // Set device memory size to the ceiling of GB granularity.
@@ -134,13 +128,26 @@ int main(int argc, char **argv) {
 
   int Rc = __tgt_activate_record_replay(DeviceId, DeviceMemorySize, false,
                                         VerifyOpt);
+
   if (Rc != OMP_TGT_SUCCESS) {
     report_fatal_error("Cannot activate record replay\n");
   }
 
+  ErrorOr<std::unique_ptr<MemoryBuffer>> DeviceMemoryMB =
+      MemoryBuffer::getFile(KernelEntryName + ".memory", /* isText */ false,
+                            /* RequiresNullTerminator */ false);
+
+  if (!DeviceMemoryMB)
+    report_fatal_error("Error reading the kernel input device memory.");
+
+  // On AMD for currently unknown reasons we cannot copy memory mapped data to device.
+  // This is a work-around.
+  uint8_t *recored_data = new uint8_t[DeviceMemoryMB.get()->getBufferSize()];
+  std::memcpy(recored_data, const_cast<char*>(DeviceMemoryMB.get()->getBuffer().data()), DeviceMemorySizeJson.value() * sizeof(uint8_t));
+
   __tgt_target_kernel_replay(
       /* Loc */ nullptr, DeviceId, KernelEntry.addr,
-      const_cast<char *>(DeviceMemoryMB.get()->getBuffer().data()),
+      (char *) recored_data,
       DeviceMemoryMB.get()->getBufferSize(), TgtArgs.data(),
       TgtArgOffsets.data(), NumArgs.value(), NumTeams, NumThreads,
       LoopTripCount.value());
@@ -168,6 +175,9 @@ int main(int argc, char **argv) {
       outs() << "[llvm-omp-kernel-replay] Replay device memory failed to "
                 "verify!\n";
   }
+
+  delete [] recored_data;
+
   // TODO: calling unregister lib causes plugin deinit error for nextgen
   // plugins.
   //__tgt_unregister_lib(&Desc);

@@ -82,19 +82,14 @@ private:
     return Plugin::success();
   }
 
-  void dumpDeviceMemory(StringRef Filename,
-                        AsyncInfoWrapperTy &AsyncInfoWrapper) {
+  void dumpDeviceMemory(StringRef Filename){
     ErrorOr<std::unique_ptr<WritableMemoryBuffer>> DeviceMemoryMB =
         WritableMemoryBuffer::getNewUninitMemBuffer(MemorySize);
     if (!DeviceMemoryMB)
       report_fatal_error("Error creating MemoryBuffer for device memory");
 
     auto Err = Device->dataRetrieve(DeviceMemoryMB.get()->getBufferStart(),
-                                    MemoryStart, MemorySize, AsyncInfoWrapper);
-    if (Err)
-      report_fatal_error("Error retrieving data for target pointer");
-
-    Err = Device->synchronize(AsyncInfoWrapper);
+                                    MemoryStart, MemorySize, nullptr);
     if (Err)
       report_fatal_error("Error retrieving data for target pointer");
 
@@ -139,8 +134,7 @@ public:
     OS.close();
   }
 
-  void dumpGlobals(StringRef Filename, DeviceImageTy &Image,
-                   AsyncInfoWrapperTy &AsyncInfoWrapper) {
+  void dumpGlobals(StringRef Filename, DeviceImageTy &Image) {
     int32_t Size = 0;
 
     for (auto &OffloadEntry : Image.getOffloadEntryTable()) {
@@ -172,7 +166,7 @@ public:
       {
         if (auto Err =
                 Device->dataRetrieve(BufferPtr, OffloadEntry.addr,
-                                     OffloadEntry.size, AsyncInfoWrapper))
+                                     OffloadEntry.size, nullptr))
           report_fatal_error("Error retrieving data for global");
       }
       if (Err)
@@ -184,9 +178,6 @@ public:
     assert(Size == getPtrDiff(BufferPtr, GlobalsMB->get()->getBufferStart()) &&
            "Buffer size mismatch");
 
-    if (auto Err = Device->synchronize(AsyncInfoWrapper))
-      report_fatal_error("Error retrieving data for target pointer");
-
     StringRef GlobalsMemory(GlobalsMB.get()->getBufferStart(), Size);
     std::error_code EC;
     raw_fd_ostream OS(Filename, EC);
@@ -197,8 +188,7 @@ public:
   void saveKernelInputInfo(const char *Name, DeviceImageTy &Image,
                            void **ArgPtrs, ptrdiff_t *ArgOffsets,
                            int32_t NumArgs, uint64_t NumTeamsClause,
-                           uint32_t ThreadLimitClause, uint64_t LoopTripCount,
-                           AsyncInfoWrapperTy &AsyncInfoWrapper) {
+                           uint32_t ThreadLimitClause, uint64_t LoopTripCount){
     json::Object JsonKernelInfo;
     JsonKernelInfo["Name"] = Name;
     JsonKernelInfo["NumArgs"] = NumArgs;
@@ -219,10 +209,10 @@ public:
     JsonKernelInfo["ArgOffsets"] = json::Value(std::move(JsonArgOffsets));
 
     SmallString<128> MemoryFilename = {Name, ".memory"};
-    dumpDeviceMemory(MemoryFilename, AsyncInfoWrapper);
+    dumpDeviceMemory(MemoryFilename);
 
     SmallString<128> GlobalsFilename = {Name, ".globals"};
-    dumpGlobals(GlobalsFilename, Image, AsyncInfoWrapper);
+    dumpGlobals(GlobalsFilename, Image);
 
     SmallString<128> JsonFilename = {Name, ".json"};
     std::error_code EC;
@@ -234,11 +224,10 @@ public:
     JsonOS.close();
   }
 
-  void saveKernelOutputInfo(const char *Name,
-                            AsyncInfoWrapperTy &AsyncInfoWrapper) {
+  void saveKernelOutputInfo(const char *Name) {
     SmallString<128> OutputFilename = {
         Name, (isRecording() ? ".original.output" : ".replay.output")};
-    dumpDeviceMemory(OutputFilename, AsyncInfoWrapper);
+    dumpDeviceMemory(OutputFilename);
   }
 
   void *alloc(uint64_t Size) {
@@ -1141,7 +1130,7 @@ Error GenericDeviceTy::launchKernel(void *EntryPtr, void **ArgPtrs,
                                     ptrdiff_t *ArgOffsets,
                                     KernelArgsTy &KernelArgs,
                                     __tgt_async_info *AsyncInfo) {
-  AsyncInfoWrapperTy AsyncInfoWrapper(*this, AsyncInfo);
+  AsyncInfoWrapperTy AsyncInfoWrapper(*this, RecordReplay.isRecordingOrReplaying() ? nullptr : AsyncInfo);
 
   GenericKernelTy &GenericKernel =
       *reinterpret_cast<GenericKernelTy *>(EntryPtr);
@@ -1150,7 +1139,7 @@ Error GenericDeviceTy::launchKernel(void *EntryPtr, void **ArgPtrs,
     RecordReplay.saveKernelInputInfo(
         GenericKernel.getName(), GenericKernel.getImage(), ArgPtrs, ArgOffsets,
         KernelArgs.NumArgs, KernelArgs.NumTeams[0], KernelArgs.ThreadLimit[0],
-        KernelArgs.Tripcount, AsyncInfoWrapper);
+        KernelArgs.Tripcount);
 
   if (RecordReplay.isRecording())
     RecordReplay.saveImage(GenericKernel.getName(), GenericKernel.getImage());
@@ -1158,12 +1147,13 @@ Error GenericDeviceTy::launchKernel(void *EntryPtr, void **ArgPtrs,
   auto Err = GenericKernel.launch(*this, ArgPtrs, ArgOffsets, KernelArgs,
                                   AsyncInfoWrapper);
 
+  // 'finalize' here to guarantee next record-replay actions are in-sync
+  AsyncInfoWrapper.finalize(Err);
+
   if (RecordReplay.isRecordingOrReplaying() &&
       RecordReplay.isSaveOutputEnabled())
-    RecordReplay.saveKernelOutputInfo(GenericKernel.getName(),
-                                      AsyncInfoWrapper);
+    RecordReplay.saveKernelOutputInfo(GenericKernel.getName());
 
-  AsyncInfoWrapper.finalize(Err);
   return Err;
 }
 
