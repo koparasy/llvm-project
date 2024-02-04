@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
 #include "Clang.h"
 #include "AMDGPU.h"
 #include "Arch/AArch64.h"
@@ -47,6 +48,7 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Support/TargetParser.h"
 #include "llvm/Support/YAMLParser.h"
+#include <clang/Driver/Driver.h>
 
 using namespace clang::driver;
 using namespace clang::driver::tools;
@@ -4628,9 +4630,20 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    ->getAsString(Args)
             << Triple.getTriple();
       } else {
-        assert(LTOMode == LTOK_Full || LTOMode == LTOK_Thin);
-        CmdArgs.push_back(Args.MakeArgString(
-            Twine("-flto=") + (LTOMode == LTOK_Thin ? "thin" : "full")));
+        assert(LTOMode == LTOK_Full || LTOMode == LTOK_Thin || LTOMode == LTOK_Dace);
+        switch (LTOMode) {
+          case LTOK_Full: CmdArgs.push_back(Args.MakeArgString(
+              Twine("-flto=full")));
+            break;
+          case LTOK_Thin: CmdArgs.push_back(Args.MakeArgString(
+              Twine("-flto=thin")));
+            break;
+          case LTOK_Dace: CmdArgs.push_back(Args.MakeArgString(
+              Twine("-flto=dace")));
+            break;
+          default:
+            break;
+        }
         CmdArgs.push_back("-flto-unit");
       }
     }
@@ -6949,7 +6962,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (VirtualFunctionElimination) {
     // VFE requires full LTO (currently, this might be relaxed to allow ThinLTO
     // in the future).
-    if (LTOMode != LTOK_Full)
+    // I will keep Dace to eliminate virtual functions, as it may help to not track ifuncs etc.
+    if (LTOMode == LTOK_Thin)
       D.Diag(diag::err_drv_argument_only_allowed_with)
           << "-fvirtual-function-elimination"
           << "-flto=full";
@@ -6983,7 +6997,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   bool DefaultsSplitLTOUnit =
       (WholeProgramVTables || SanitizeArgs.needsLTO()) &&
-      (LTOMode == LTOK_Full || TC.canSplitThinLTOUnit());
+      (LTOMode == LTOK_Full || LTOMode == LTOK_Dace || TC.canSplitThinLTOUnit());
   bool SplitLTOUnit =
       Args.hasFlag(options::OPT_fsplit_lto_unit,
                    options::OPT_fno_split_lto_unit, DefaultsSplitLTOUnit);
@@ -8141,6 +8155,20 @@ void OffloadWrapper::ConstructJob(Compilation &C, const JobAction &JA,
       JA, *this, ResponseFileSupport::None(),
       Args.MakeArgString(getToolChain().GetProgramPath(getShortName())),
       CmdArgs, Inputs, Output));
+}
+
+void DaceWrapper::ConstructJob(Compilation &C, const JobAction &JA,
+                                 const InputInfo &Output,
+                                 const InputInfoList &Inputs,
+                                 const ArgList &Args,
+                                 const char *LinkingOutput) const {
+  Linker->ConstructJob(C, JA, Output, Inputs, Args, LinkingOutput);
+  const auto &LinkCommand = C.getJobs().getJobs().back();
+  std::cout << "I just constructed the DaceWrapper job\n";
+  LinkCommand->replaceExecutable("/usr/bin/echo");
+  ArgStringList CmdArgs;
+  CmdArgs.push_back(Args.MakeArgString("Hi from pending DaCe entry point"));
+  LinkCommand->replaceArguments(CmdArgs);
 }
 
 void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,

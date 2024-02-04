@@ -53,6 +53,7 @@ enum LTOKind {
   LTOK_None,
   LTOK_Full,
   LTOK_Thin,
+  LTOK_Dace,
   LTOK_Unknown
 };
 

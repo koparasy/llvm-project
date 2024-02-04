@@ -17,6 +17,8 @@
 #include "llvm/ADT/Triple.h"
 #include "llvm/Option/Option.h"
 #include "llvm/Support/raw_ostream.h"
+#include <clang/Driver/Action.h>
+#include <llvm/Support/Compiler.h>
 
 namespace clang {
 class ObjCRuntime;
@@ -162,6 +164,20 @@ class LLVM_LIBRARY_VISIBILITY OffloadWrapper final : public Tool {
 public:
   OffloadWrapper(const ToolChain &TC)
       : Tool("offload wrapper", "clang-offload-wrapper", TC) {}
+
+  bool hasIntegratedCPP() const override { return false; }
+  void ConstructJob(Compilation &C, const JobAction &JA,
+                    const InputInfo &Output, const InputInfoList &Inputs,
+                    const llvm::opt::ArgList &TCArgs,
+                    const char *LinkingOutput) const override;
+};
+
+class LLVM_LIBRARY_VISIBILITY DaceWrapper final : public Tool {
+  const Tool *Linker;
+
+  public:
+  DaceWrapper(const ToolChain &TC, const Tool *Linker)
+    : Tool("DaCe wrapper", "dace-wrapper", TC), Linker(Linker) {}
 
   bool hasIntegratedCPP() const override { return false; }
   void ConstructJob(Compilation &C, const JobAction &JA,

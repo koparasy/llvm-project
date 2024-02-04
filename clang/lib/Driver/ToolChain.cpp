@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <iostream>
 #include "clang/Driver/ToolChain.h"
 #include "ToolChains/Arch/ARM.h"
 #include "ToolChains/Clang.h"
@@ -297,7 +298,14 @@ Tool *ToolChain::getClangAs() const {
   return Assemble.get();
 }
 
+Tool *ToolChain::getDaceWrapper() const {
+  if (!DaceWrapper)
+    DaceWrapper.reset(new tools::DaceWrapper(*this, getLink()));
+  return DaceWrapper.get();
+}
+
 Tool *ToolChain::getLink() const {
+  auto LTOMode = D.getLTOMode(false);
   if (!Link)
     Link.reset(buildLinker());
   return Link.get();
@@ -342,6 +350,8 @@ Tool *ToolChain::getTool(Action::ActionClass AC) const {
     return getIfsMerge();
 
   case Action::LinkJobClass:
+    if (D.getLTOMode(false) == LTOK_Dace)
+      return getDaceWrapper();
     return getLink();
 
   case Action::StaticLibJobClass:
