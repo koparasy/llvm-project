@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-#include <iostream>
 #include "ToolChains/AIX.h"
 #include "ToolChains/AMDGPU.h"
 #include "ToolChains/AMDGPUOpenMP.h"
@@ -91,6 +90,7 @@
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
+#include <iostream>
 #include <map>
 #include <memory>
 #include <utility>
@@ -668,13 +668,20 @@ static driver::LTOKind parseLTOMode(Driver &D, const llvm::opt::ArgList &Args,
                                 .Case("dace", LTOK_Dace)
                                 .Default(LTOK_Unknown);
 
-  std::cout << "I AM HERE " << LTOName.data() << " LTOMode " << LTOMode << "\n";
+  if (LTOMode == LTOK_Dace) {
+    const Arg *A = Args.getLastArg(clang::driver::options::OPT_dace_toolchain);
+    if (!A) {
+      D.Diag(diag::err_drv_lto_without_dace_toolchain);
+      return LTOMode;
+    }
+  }
+
   if (LTOMode == LTOK_Unknown) {
     D.Diag(diag::err_drv_unsupported_option_argument)
         << A->getOption().getName() << A->getValue();
     return LTOK_None;
   }
-  std::cout << "Returning from here\n";
+
   return LTOMode;
 }
 
