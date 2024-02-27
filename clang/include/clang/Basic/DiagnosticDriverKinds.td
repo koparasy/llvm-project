@@ -266,6 +266,7 @@ def err_drv_invalid_gcc_output_type : Error<
 def err_drv_cc_print_options_failure : Error<
     "unable to open CC_PRINT_OPTIONS file: %0">;
 def err_drv_lto_without_lld : Error<"LTO requires -fuse-ld=lld">;
+def err_drv_lto_without_dace_toolchain: Error<"DaCe LTO requires --dace-toolchain=<path-to-lldcir compiler>">;
 def err_drv_preamble_format : Error<
     "incorrect format for -preamble-bytes=N,END">;
 def warn_invalid_ios_deployment_target : Warning<

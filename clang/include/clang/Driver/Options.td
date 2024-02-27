@@ -2080,6 +2080,8 @@ def fthin_link_bitcode_EQ : Joined<["-"], "fthin-link-bitcode=">,
   Flags<[CoreOption, CC1Option]>, Group<f_Group>,
   HelpText<"Write minimized bitcode to <file> for the ThinLTO thin link only">,
   MarshallingInfoString<CodeGenOpts<"ThinLinkBitcodeFile">>;
+def dace_toolchain : Joined<["--"], "dace-toolchain=">, Flags<[CoreOption, CC1Option]>,
+  HelpText<"Full Path to LLVM-IR-To-DaCe Wrapper, will only be called when -flto=dace is used at linkage step">;
 def fmacro_backtrace_limit_EQ : Joined<["-"], "fmacro-backtrace-limit=">,
                                 Group<f_Group>, Flags<[NoXarchOption, CoreOption]>;
 defm merge_all_constants : BoolFOption<"merge-all-constants",

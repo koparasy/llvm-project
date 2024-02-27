@@ -1732,7 +1732,7 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
     StringRef S = A->getValue();
     if (S == "thin")
       Opts.PrepareForThinLTO = true;
-    else if (S != "full")
+    else if (S != "full" && S != "dace")
       Diags.Report(diag::err_drv_invalid_value) << A->getAsString(Args) << S;
   }
   if (Arg *A = Args.getLastArg(OPT_fthinlto_index_EQ)) {
