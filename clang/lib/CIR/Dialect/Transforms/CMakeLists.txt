@@ -12,6 +12,7 @@ add_clang_library(MLIRCIRTransforms
   LoweringPrepare.cpp
   GotoSolver.cpp
   IdiomRecognizer.cpp
+  MaterializeASTFacts.cpp
 
   DEPENDS
   MLIRCIRPassIncGen
