@@ -21,6 +21,12 @@ add_clang_library(clangCIRFrontendAction
   clangCIRLoweringCommon
   clangCIRLoweringDirectToLLVM
   clangCodeGen
+  CIROpenACCSupport
+  CIROpenMPSupport
   MLIRCIR
+  MLIRDLTIDialect
   MLIRIR
+  MLIRLLVMDialect
+  MLIROpenMPDialect
+  MLIRParser
   )
