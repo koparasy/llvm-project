@@ -7,16 +7,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "PassDetail.h"
+#include "TargetLowering/LowerModule.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributeInterfaces.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
-#include "clang/AST/ASTContext.h"
-#include "clang/AST/Mangle.h"
 #include "clang/Basic/Cuda.h"
-#include "clang/Basic/Module.h"
-#include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Basic/TargetCXXABI.h"
 #include "clang/Basic/TargetInfo.h"
@@ -227,7 +224,8 @@ struct LoweringPreparePass
     } else if (useARMGuardVarABI()) {
       // Guard variables are size width on ARM (32-bit AArch32, 64-bit AArch64).
       const unsigned sizeTypeSize =
-          astCtx->getTypeSize(astCtx->getSignedSizeType());
+          lowerModule->getTarget().getTypeWidth(
+              lowerModule->getTarget().getSignedSizeType());
       guardTy =
           cir::IntType::get(&getContext(), sizeTypeSize, /*isSigned=*/true);
       guardAlignment =
@@ -255,7 +253,7 @@ struct LoweringPreparePass
       // for non-ELF and non-Wasm object formats, so only do it for ELF and
       // Wasm.
       bool hasComdat = globalOp.getComdat();
-      const llvm::Triple &triple = astCtx->getTargetInfo().getTriple();
+      const llvm::Triple &triple = lowerModule->getTarget().getTriple();
       // TODO(cir): for now, we're just setting comdat to true, but it should
       // contain a comdat reference name here instead.
       if (!isLocalVarDecl && hasComdat &&
@@ -272,10 +270,19 @@ struct LoweringPreparePass
   }
 
   ///
-  /// AST related
-  /// -----------
+  /// Target / language fact source
+  /// -----------------------------
 
-  clang::ASTContext *astCtx;
+  /// Target/LangOpts/CXXABI bundle the pass reads instead of going to a live
+  /// ASTContext.  Set from the surrounding cc1 invocation by
+  /// runCIRToCIRPasses (or by the .cir input path in CIRGenAction).  Always
+  /// non-null while the pass runs.
+  cir::LowerModule *lowerModule = nullptr;
+
+  /// Filesystem used to read CUDA/HIP fatbin payloads referenced by the
+  /// module.  Defaults to the real filesystem; CIRGen can plumb the cc1
+  /// invocation's VFS instead so virtualized inputs keep working.
+  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs;
 
   /// Tracks current module.
   mlir::ModuleOp mlirModule;
@@ -320,7 +327,7 @@ struct LoweringPreparePass
   /// Returns true if the target uses ARM-style guard variables for static
   /// local initialization (32-bit guard, check bit 0 only).
   bool useARMGuardVarABI() const {
-    switch (astCtx->getCXXABIKind()) {
+    switch (lowerModule->getCXXABIKind()) {
     case clang::TargetCXXABI::GenericARM:
     case clang::TargetCXXABI::iOS:
     case clang::TargetCXXABI::WatchOS:
@@ -360,7 +367,7 @@ struct LoweringPreparePass
 
     llvm::StringLiteral nameAtExit = "__cxa_atexit";
     if (tls)
-      nameAtExit = astCtx->getTargetInfo().getTriple().isOSDarwin()
+      nameAtExit = lowerModule->getTarget().getTriple().isOSDarwin()
                        ? llvm::StringLiteral("_tlv_atexit")
                        : llvm::StringLiteral("__cxa_thread_atexit");
 
@@ -496,7 +503,10 @@ struct LoweringPreparePass
     builder.createYield(loc); // Outermost IfOp
   }
 
-  void setASTContext(clang::ASTContext *c) { astCtx = c; }
+  void setLowerModule(cir::LowerModule *lm) { lowerModule = lm; }
+  void setVFS(llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> v) {
+    vfs = std::move(v);
+  }
 };
 
 } // namespace
@@ -768,7 +778,7 @@ buildRangeReductionComplexDiv(CIRBaseBuilderTy &builder, mlir::Location loc,
 }
 
 static mlir::Type higherPrecisionElementTypeForComplexArithmetic(
-    mlir::MLIRContext &context, clang::ASTContext &cc,
+    mlir::MLIRContext &context, const cir::LowerModule &lm,
     CIRBaseBuilderTy &builder, mlir::Type elementType) {
 
   auto getHigherPrecisionFPType = [&context](mlir::Type type) -> mlir::Type {
@@ -785,8 +795,9 @@ static mlir::Type higherPrecisionElementTypeForComplexArithmetic(
   };
 
   auto getFloatTypeSemantics =
-      [&cc](mlir::Type type) -> const llvm::fltSemantics & {
-    const clang::TargetInfo &info = cc.getTargetInfo();
+      [&lm](mlir::Type type) -> const llvm::fltSemantics & {
+    const clang::TargetInfo &info = lm.getTarget();
+    const clang::LangOptions &langOpts = lm.getLangOpts();
     if (mlir::isa<cir::FP16Type>(type))
       return info.getHalfFormat();
 
@@ -800,13 +811,13 @@ static mlir::Type higherPrecisionElementTypeForComplexArithmetic(
       return info.getDoubleFormat();
 
     if (mlir::isa<cir::LongDoubleType>(type)) {
-      if (cc.getLangOpts().OpenMP && cc.getLangOpts().OpenMPIsTargetDevice)
+      if (langOpts.OpenMP && langOpts.OpenMPIsTargetDevice)
         llvm_unreachable("NYI Float type semantics with OpenMP");
       return info.getLongDoubleFormat();
     }
 
     if (mlir::isa<cir::FP128Type>(type)) {
-      if (cc.getLangOpts().OpenMP && cc.getLangOpts().OpenMPIsTargetDevice)
+      if (langOpts.OpenMP && langOpts.OpenMPIsTargetDevice)
         llvm_unreachable("NYI Float type semantics with OpenMP");
       return info.getFloat128Format();
     }
@@ -841,7 +852,7 @@ static mlir::Value
 lowerComplexDiv(LoweringPreparePass &pass, CIRBaseBuilderTy &builder,
                 mlir::Location loc, cir::ComplexDivOp op, mlir::Value lhsReal,
                 mlir::Value lhsImag, mlir::Value rhsReal, mlir::Value rhsImag,
-                mlir::MLIRContext &mlirCx, clang::ASTContext &cc) {
+                mlir::MLIRContext &mlirCx, const cir::LowerModule &lm) {
   cir::ComplexType complexTy = op.getType();
   if (mlir::isa<cir::FPTypeInterface>(complexTy.getElementType())) {
     cir::ComplexRangeKind range = op.getRange();
@@ -857,7 +868,7 @@ lowerComplexDiv(LoweringPreparePass &pass, CIRBaseBuilderTy &builder,
     if (range == cir::ComplexRangeKind::Promoted) {
       mlir::Type originalElementType = complexTy.getElementType();
       mlir::Type higherPrecisionElementType =
-          higherPrecisionElementTypeForComplexArithmetic(mlirCx, cc, builder,
+          higherPrecisionElementTypeForComplexArithmetic(mlirCx, lm, builder,
                                                          originalElementType);
 
       if (!higherPrecisionElementType)
@@ -905,7 +916,7 @@ void LoweringPreparePass::lowerComplexDivOp(cir::ComplexDivOp op) {
 
   mlir::Value loweredResult =
       lowerComplexDiv(*this, builder, loc, op, lhsReal, lhsImag, rhsReal,
-                      rhsImag, getContext(), *astCtx);
+                      rhsImag, getContext(), *lowerModule);
   op.replaceAllUsesWith(loweredResult);
   op.erase();
 }
@@ -1296,7 +1307,7 @@ void LoweringPreparePass::handleStaticLocal(cir::GlobalOp globalOp,
   // We only need to use thread-safe statics for local non-TLS variables and
   // inline variables; other global initialization is always single-threaded
   // or (through lazy dynamic loading in multiple threads) unsequenced.
-  bool threadsafe = astCtx->getLangOpts().ThreadsafeStatics &&
+  bool threadsafe = lowerModule->getLangOpts().ThreadsafeStatics &&
                     (varDecl.isLocalVarDecl() || nonTemplateInline) &&
                     !varDecl.getTLSKind();
 
@@ -1337,7 +1348,7 @@ void LoweringPreparePass::handleStaticLocal(cir::GlobalOp globalOp,
   // call __cxa_guard_acquire unconditionally. The "inline" check isn't
   // actually inline, and the user might not expect calls to __atomic libcalls.
   unsigned maxInlineWidthInBits =
-      astCtx->getTargetInfo().getMaxAtomicInlineWidth();
+      lowerModule->getTarget().getMaxAtomicInlineWidth();
 
   if (!threadsafe || maxInlineWidthInBits) {
     // Load the first byte of the guard variable.
@@ -1428,17 +1439,17 @@ void LoweringPreparePass::lowerLocalInitOp(cir::LocalInitOp initOp) {
   initOp.erase();
 }
 static bool isThreadWrapperReplaceable(cir::TLS_Model tls,
-                                       clang::ASTContext &astCtx) {
+                                       const cir::LowerModule &lm) {
   return tls == cir::TLS_Model::GeneralDynamic &&
-         astCtx.getTargetInfo().getTriple().isOSDarwin();
+         lm.getTarget().getTriple().isOSDarwin();
 }
 
 static cir::GlobalLinkageKind
-getThreadLocalWrapperLinkage(GlobalOp op, clang::ASTContext &astCtx) {
+getThreadLocalWrapperLinkage(GlobalOp op, const cir::LowerModule &lm) {
   if (isLocalLinkage(op.getLinkage()))
     return op.getLinkage();
 
-  if (isThreadWrapperReplaceable(*op.getTlsModel(), astCtx))
+  if (isThreadWrapperReplaceable(*op.getTlsModel(), lm))
     if (!isLinkOnceLinkage(op.getLinkage()) &&
         !isWeakODRLinkage(op.getLinkage()))
       return op.getLinkage();
@@ -1468,13 +1479,13 @@ LoweringPreparePass::getOrCreateThreadLocalWrapper(CIRBaseBuilderTy &builder,
       cir::FuncOp::create(builder, op.getLoc(), wrapperName, funcType);
 
   cir::GlobalLinkageKind linkageKind =
-      getThreadLocalWrapperLinkage(op, *astCtx);
+      getThreadLocalWrapperLinkage(op, *lowerModule);
   func.setLinkageAttr(
       cir::GlobalLinkageKindAttr::get(&getContext(), linkageKind));
 
   // TODO(cir): This is supposed to refer to the comdat of the global symbol,
   // but that isn't in CIR yet.
-  if (astCtx->getTargetInfo().getTriple().supportsCOMDAT() &&
+  if (lowerModule->getTarget().getTriple().supportsCOMDAT() &&
       func.isWeakForLinker())
     func.setComdat(true);
 
@@ -1482,12 +1493,12 @@ LoweringPreparePass::getOrCreateThreadLocalWrapper(CIRBaseBuilderTy &builder,
       func, mlir::SymbolTable::Visibility::Private);
 
   if (!isLocalLinkage(linkageKind)) {
-    if (!isThreadWrapperReplaceable(*op.getTlsModel(), *astCtx) ||
+    if (!isThreadWrapperReplaceable(*op.getTlsModel(), *lowerModule) ||
         isLinkOnceLinkage(linkageKind) || isWeakODRLinkage(linkageKind) ||
         op.getGlobalVisibility() == cir::VisibilityKind::Hidden)
       func.setGlobalVisibility(cir::VisibilityKind::Hidden);
   }
-  if (isThreadWrapperReplaceable(*op.getTlsModel(), *astCtx))
+  if (isThreadWrapperReplaceable(*op.getTlsModel(), *lowerModule))
     op->emitError("Unhandled thread wrapper attributes for CC and Nounwind");
 
   threadLocalWrappers.insert({wrapperName.getValue(), func});
@@ -1834,18 +1845,11 @@ void LoweringPreparePass::buildCXXGlobalInitFunc() {
   // way as a non-modular TU with imports.
   // The C++20 named-module init function name is precomputed by CIRGen and
   // stored as a module-level attribute, so this pass does not need a live
-  // ASTContext in split-compilation flows. Fall back to the AST-based path
-  // only when the attribute is absent (e.g. tests that bypass CIRGen).
+  // ASTContext.  Modules built directly from textual CIR can opt in to the
+  // module-init form by setting the same attribute.
   if (auto fnNameAttr = mlirModule->getAttrOfType<mlir::StringAttr>(
           cir::CIRDialect::getCXXModuleInitFnNameAttrName())) {
     fnName += fnNameAttr.getValue();
-  } else if (astCtx && astCtx->getCurrentNamedModule() &&
-             !astCtx->getCurrentNamedModule()->isModuleImplementation()) {
-    llvm::raw_svector_ostream out(fnName);
-    std::unique_ptr<clang::MangleContext> mangleCtx(
-        astCtx->createMangleContext());
-    cast<clang::ItaniumMangleContext>(*mangleCtx)
-        .mangleModuleInitializer(astCtx->getCurrentNamedModule(), out);
   } else {
     fnName += "_GLOBAL__sub_I_";
     fnName += getTransformedFileName(mlirModule);
@@ -1873,7 +1877,7 @@ void LoweringPreparePass::buildCXXGlobalInitFunc() {
 /// region is non-empty, the ctor loop is wrapped in a cir.cleanup.scope whose
 /// EH cleanup performs a reverse destruction loop using the partial dtor body.
 static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
-                                       clang::ASTContext *astCtx,
+                                       const cir::LowerModule *lm,
                                        mlir::Operation *op, mlir::Type eltTy,
                                        mlir::Value addr,
                                        mlir::Value numElements,
@@ -1881,10 +1885,10 @@ static void lowerArrayDtorCtorIntoLoop(cir::CIRBaseBuilderTy &builder,
   mlir::Location loc = op->getLoc();
   bool isDynamic = numElements != nullptr;
 
-  // TODO: instead of getting the size from the AST context, create alias for
+  // TODO: instead of getting the size from the lower module, create alias for
   // PtrDiffTy and unify with CIRGen stuff.
   const unsigned sizeTypeSize =
-      astCtx->getTypeSize(astCtx->getSignedSizeType());
+      lm->getTarget().getTypeWidth(lm->getTarget().getSignedSizeType());
 
   // Both constructors and destructors use end = begin + numElements.
   // Constructors iterate forward [begin, end).  Destructors iterate backward
@@ -2051,7 +2055,7 @@ void LoweringPreparePass::lowerArrayDtor(cir::ArrayDtor op) {
   mlir::Type eltTy = op->getRegion(0).getArgument(0).getType();
 
   if (op.getNumElements()) {
-    lowerArrayDtorCtorIntoLoop(builder, astCtx, op, eltTy, op.getAddr(),
+    lowerArrayDtorCtorIntoLoop(builder, lowerModule, op, eltTy, op.getAddr(),
                                op.getNumElements(), /*arrayLen=*/0,
                                /*isCtor=*/false);
     return;
@@ -2059,7 +2063,7 @@ void LoweringPreparePass::lowerArrayDtor(cir::ArrayDtor op) {
 
   auto arrayLen =
       mlir::cast<cir::ArrayType>(op.getAddr().getType().getPointee()).getSize();
-  lowerArrayDtorCtorIntoLoop(builder, astCtx, op, eltTy, op.getAddr(),
+  lowerArrayDtorCtorIntoLoop(builder, lowerModule, op, eltTy, op.getAddr(),
                              /*numElements=*/nullptr, arrayLen,
                              /*isCtor=*/false);
 }
@@ -2071,7 +2075,7 @@ void LoweringPreparePass::lowerArrayCtor(cir::ArrayCtor op) {
   mlir::Type eltTy = op->getRegion(0).getArgument(0).getType();
 
   if (op.getNumElements()) {
-    lowerArrayDtorCtorIntoLoop(builder, astCtx, op, eltTy, op.getAddr(),
+    lowerArrayDtorCtorIntoLoop(builder, lowerModule, op, eltTy, op.getAddr(),
                                op.getNumElements(), /*arrayLen=*/0,
                                /*isCtor=*/true);
     return;
@@ -2079,7 +2083,7 @@ void LoweringPreparePass::lowerArrayCtor(cir::ArrayCtor op) {
 
   auto arrayLen =
       mlir::cast<cir::ArrayType>(op.getAddr().getType().getPointee()).getSize();
-  lowerArrayDtorCtorIntoLoop(builder, astCtx, op, eltTy, op.getAddr(),
+  lowerArrayDtorCtorIntoLoop(builder, lowerModule, op, eltTy, op.getAddr(),
                              /*numElements=*/nullptr, arrayLen,
                              /*isCtor=*/true);
 }
@@ -2272,8 +2276,8 @@ void LoweringPreparePass::runOnOp(mlir::Operation *op) {
   }
 }
 
-static llvm::StringRef getCUDAPrefix(clang::ASTContext *astCtx) {
-  if (astCtx->getLangOpts().HIP)
+static llvm::StringRef getCUDAPrefix(const cir::LowerModule *lm) {
+  if (lm->getLangOpts().HIP)
     return "hip";
   return "cuda";
 }
@@ -2303,9 +2307,9 @@ static std::string addUnderscoredPrefix(llvm::StringRef prefix,
 /// }
 /// \endcode
 void LoweringPreparePass::buildCUDAModuleCtor() {
-  bool isHIP = astCtx->getLangOpts().HIP;
+  bool isHIP = lowerModule->getLangOpts().HIP;
 
-  if (astCtx->getLangOpts().GPURelocatableDeviceCode)
+  if (lowerModule->getLangOpts().GPURelocatableDeviceCode)
     llvm_unreachable("GPU RDC NYI");
 
   // For CUDA without -fgpu-rdc, it's safe to stop generating ctor
@@ -2328,10 +2332,10 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
           .getName()
           .getValue();
 
-  llvm::vfs::FileSystem &vfs =
-      astCtx->getSourceManager().getFileManager().getVirtualFileSystem();
+  llvm::vfs::FileSystem &gpuBinaryVFS =
+      vfs ? *vfs : *llvm::vfs::getRealFileSystem();
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> gpuBinaryOrErr =
-      vfs.getBufferForFile(cudaGPUBinaryName);
+      gpuBinaryVFS.getBufferForFile(cudaGPUBinaryName);
   if (std::error_code ec = gpuBinaryOrErr.getError()) {
     mlirModule->emitError("cannot open GPU binary file: " + cudaGPUBinaryName +
                           ": " + ec.message());
@@ -2341,7 +2345,7 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
       std::move(gpuBinaryOrErr.get());
 
   // Set up common types and builder.
-  llvm::StringRef cudaPrefix = getCUDAPrefix(astCtx);
+  llvm::StringRef cudaPrefix = getCUDAPrefix(lowerModule);
   mlir::Location loc = mlirModule->getLoc();
   CIRBaseBuilderTy builder(getContext());
   builder.setInsertionPointToStart(mlirModule.getBody());
@@ -2350,17 +2354,17 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
   PointerType voidPtrTy = builder.getVoidPtrTy();
   PointerType voidPtrPtrTy = builder.getPointerTo(voidPtrTy);
   IntType intTy = builder.getSIntNTy(32);
-  IntType charTy = cir::IntType::get(&getContext(), astCtx->getCharWidth(),
+  IntType charTy = cir::IntType::get(&getContext(), lowerModule->getTarget().getCharWidth(),
                                      /*isSigned=*/false);
 
   // --- Create fatbin globals ---
 
   // The section names are different for MAC OS X.
   llvm::StringRef fatbinConstName =
-      astCtx->getLangOpts().HIP ? ".hip_fatbin" : ".nv_fatbin";
+      lowerModule->getLangOpts().HIP ? ".hip_fatbin" : ".nv_fatbin";
 
   llvm::StringRef fatbinSectionName =
-      astCtx->getLangOpts().HIP ? ".hipFatBinSegment" : ".nvFatBinSegment";
+      lowerModule->getLangOpts().HIP ? ".hipFatBinSegment" : ".nvFatBinSegment";
 
   // Create the fatbin string constant with GPU binary contents.
   auto fatbinType =
@@ -2491,7 +2495,7 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
     }
     return;
   }
-  if (!astCtx->getLangOpts().GPURelocatableDeviceCode) {
+  if (!lowerModule->getLangOpts().GPURelocatableDeviceCode) {
 
     // --- Create CUDA CTOR-DTOR ---
     // Register binary with CUDA runtime. This is substantially different in
@@ -2516,7 +2520,7 @@ void LoweringPreparePass::buildCUDAModuleCtor() {
     //      void __cudaRegisterFatBinaryEnd(void **fatbinHandle);
     // This is CUDA-specific, so no need to use `addUnderscoredPrefix`.
     if (clang::CudaFeatureEnabled(
-            astCtx->getTargetInfo().getSDKVersion(),
+            lowerModule->getTarget().getSDKVersion(),
             clang::CudaFeature::CUDA_USES_FATBIN_REGISTER_END)) {
       cir::CIRBaseBuilderTy globalBuilder(getContext());
       globalBuilder.setInsertionPointToStart(mlirModule.getBody());
@@ -2551,7 +2555,7 @@ std::optional<FuncOp> LoweringPreparePass::buildCUDAModuleDtor() {
   if (!mlirModule->getAttr(CIRDialect::getCUDABinaryHandleAttrName()))
     return {};
 
-  llvm::StringRef prefix = getCUDAPrefix(astCtx);
+  llvm::StringRef prefix = getCUDAPrefix(lowerModule);
 
   VoidType voidTy = VoidType::get(&getContext());
   PointerType voidPtrPtrTy = PointerType::get(PointerType::get(voidTy));
@@ -2608,7 +2612,7 @@ std::optional<FuncOp> LoweringPreparePass::buildHIPModuleDtor() {
   if (!mlirModule->getAttr(CIRDialect::getCUDABinaryHandleAttrName()))
     return {};
 
-  llvm::StringRef prefix = getCUDAPrefix(astCtx);
+  llvm::StringRef prefix = getCUDAPrefix(lowerModule);
 
   VoidType voidTy = VoidType::get(&getContext());
   PointerType voidPtrPtrTy = PointerType::get(PointerType::get(voidTy));
@@ -2672,7 +2676,7 @@ std::optional<FuncOp> LoweringPreparePass::buildCUDARegisterGlobals() {
   builder.setInsertionPointToStart(mlirModule.getBody());
 
   mlir::Location loc = mlirModule.getLoc();
-  llvm::StringRef cudaPrefix = getCUDAPrefix(astCtx);
+  llvm::StringRef cudaPrefix = getCUDAPrefix(lowerModule);
 
   auto voidTy = VoidType::get(&getContext());
   auto voidPtrTy = PointerType::get(voidTy);
@@ -2699,14 +2703,14 @@ std::optional<FuncOp> LoweringPreparePass::buildCUDARegisterGlobals() {
 void LoweringPreparePass::buildCUDARegisterGlobalFunctions(
     cir::CIRBaseBuilderTy &builder, FuncOp regGlobalFunc) {
   mlir::Location loc = mlirModule.getLoc();
-  llvm::StringRef cudaPrefix = getCUDAPrefix(astCtx);
+  llvm::StringRef cudaPrefix = getCUDAPrefix(lowerModule);
   cir::CIRDataLayout dataLayout(mlirModule);
 
   auto voidTy = VoidType::get(&getContext());
   auto voidPtrTy = PointerType::get(voidTy);
   auto voidPtrPtrTy = PointerType::get(voidPtrTy);
   IntType intTy = builder.getSIntNTy(32);
-  IntType charTy = cir::IntType::get(&getContext(), astCtx->getCharWidth(),
+  IntType charTy = cir::IntType::get(&getContext(), lowerModule->getTarget().getCharWidth(),
                                      /*isSigned=*/false);
 
   // Extract the GPU binary handle argument.
@@ -2748,7 +2752,7 @@ void LoweringPreparePass::buildCUDARegisterGlobalFunctions(
   };
 
   cir::ConstantOp cirNullPtr = builder.getNullPtr(voidPtrTy, loc);
-  bool isHIP = astCtx->getLangOpts().HIP;
+  bool isHIP = lowerModule->getLangOpts().HIP;
   for (auto kernelName : cudaKernelMap.keys()) {
     FuncOp deviceStub = cudaKernelMap[kernelName];
     GlobalOp deviceFuncStr = makeConstantString(kernelName);
@@ -2801,7 +2805,7 @@ void LoweringPreparePass::runOnOperation() {
 
   buildCXXGlobalInitFunc();
   buildCXXGlobalTlsFunc();
-  if (astCtx->getLangOpts().CUDA && !astCtx->getLangOpts().CUDAIsDevice)
+  if (lowerModule->getLangOpts().CUDA && !lowerModule->getLangOpts().CUDAIsDevice)
     buildCUDAModuleCtor();
 
   buildGlobalCtorDtorList();
@@ -2811,9 +2815,11 @@ std::unique_ptr<Pass> mlir::createLoweringPreparePass() {
   return std::make_unique<LoweringPreparePass>();
 }
 
-std::unique_ptr<Pass>
-mlir::createLoweringPreparePass(clang::ASTContext *astCtx) {
+std::unique_ptr<Pass> mlir::createLoweringPreparePass(
+    cir::LowerModule *lowerModule,
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs) {
   auto pass = std::make_unique<LoweringPreparePass>();
-  pass->setASTContext(astCtx);
-  return std::move(pass);
+  pass->setLowerModule(lowerModule);
+  pass->setVFS(std::move(vfs));
+  return pass;
 }
