@@ -86,6 +86,13 @@ CreateFrontendBaseAction(CompilerInstance &CI) {
     CI.getDiagnostics().Report(diag::err_fe_cir_not_built);
     return nullptr;
 #endif
+  case EmitCIRPreLowering:
+#if CLANG_ENABLE_CIR
+    return std::make_unique<cir::EmitCIRPreLoweringAction>();
+#else
+    CI.getDiagnostics().Report(diag::err_fe_cir_not_built);
+    return nullptr;
+#endif
   case EmitHTML:               return std::make_unique<HTMLPrintAction>();
   case EmitLLVM: {
 #if CLANG_ENABLE_CIR

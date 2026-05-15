@@ -46,6 +46,7 @@ static BackendAction
 getBackendActionFromOutputType(CIRGenAction::OutputType Action) {
   switch (Action) {
   case CIRGenAction::OutputType::EmitCIR:
+  case CIRGenAction::OutputType::EmitCIRPreLowering:
     assert(false &&
            "Unsupported output type for getBackendActionFromOutputType!");
     break; // Unreachable, but fall through to report that
@@ -58,8 +59,6 @@ getBackendActionFromOutputType(CIRGenAction::OutputType Action) {
   case CIRGenAction::OutputType::EmitObj:
     return BackendAction::Backend_EmitObj;
   }
-  // We should only get here if a non-enum value is passed in or we went through
-  // the assert(false) case above
   llvm_unreachable("Unsupported output type!");
 }
 
@@ -152,25 +151,55 @@ public:
     mlir::MLIRContext &MlirCtx = Gen->getMLIRContext();
 
     if (!FEOptions.ClangIRDisablePasses) {
-      // Setup and run CIR pipeline.
+      // Pre-lowering passes run first; -emit-cir-pre-lowering snapshots the
+      // module here, before any target/ABI/lowering-prepare passes.
+      if (runPreLoweringPasses(MlirModule, MlirCtx, C,
+                               !FEOptions.ClangIRDisableCIRVerifier,
+                               FEOptions.ClangIREnableIdiomRecognizer,
+                               CGO.OptimizationLevel > 0)
+              .failed()) {
+        CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
+        return;
+      }
+
+      if (Action == CIRGenAction::OutputType::EmitCIRPreLowering) {
+        if (OutputStream && MlirModule) {
+          mlir::OpPrintingFlags Flags;
+          Flags.enableDebugInfo(/*enable=*/true, /*prettyForm=*/false);
+          MlirModule->print(*OutputStream, Flags);
+        }
+        return;
+      }
+
+      // Post-lowering passes need a LowerModule built from the cc1
+      // invocation to stand in for the AST.
       std::unique_ptr<cir::LowerModule> lowerModule =
           makeLowerModuleFromInvocation(CI, MlirModule);
       if (!lowerModule) {
         CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
         return;
       }
-      if (runCIRToCIRPasses(MlirModule, MlirCtx, C, *lowerModule,
-                            &CI.getVirtualFileSystem(),
-                            !FEOptions.ClangIRDisableCIRVerifier,
-                            FEOptions.ClangIREnableIdiomRecognizer,
-                            CGO.OptimizationLevel > 0)
+      if (runPostLoweringPasses(MlirModule, MlirCtx, *lowerModule,
+                                &CI.getVirtualFileSystem(),
+                                !FEOptions.ClangIRDisableCIRVerifier)
               .failed()) {
         CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
         return;
       }
+    } else if (Action == CIRGenAction::OutputType::EmitCIRPreLowering) {
+      // No pipeline ran, but the user still wants the pre-lowering form: dump
+      // the CIRGen output verbatim.
+      if (OutputStream && MlirModule) {
+        mlir::OpPrintingFlags Flags;
+        Flags.enableDebugInfo(/*enable=*/true, /*prettyForm=*/false);
+        MlirModule->print(*OutputStream, Flags);
+      }
+      return;
     }
 
     switch (Action) {
+    case CIRGenAction::OutputType::EmitCIRPreLowering:
+      llvm_unreachable("EmitCIRPreLowering handled before this switch");
     case CIRGenAction::OutputType::EmitCIR:
       if (OutputStream && MlirModule) {
         mlir::OpPrintingFlags Flags;
@@ -257,6 +286,7 @@ getOutputStream(CompilerInstance &CI, StringRef InFile,
   case CIRGenAction::OutputType::EmitAssembly:
     return CI.createDefaultOutputFile(false, InFile, "s");
   case CIRGenAction::OutputType::EmitCIR:
+  case CIRGenAction::OutputType::EmitCIRPreLowering:
     return CI.createDefaultOutputFile(false, InFile, "cir");
   case CIRGenAction::OutputType::EmitLLVM:
     return CI.createDefaultOutputFile(false, InFile, "ll");
@@ -324,36 +354,32 @@ void CIRGenAction::ExecuteAction() {
                  mlir::StringAttr::get(MLIRCtx, invocationTriple));
   }
 
-  if (Action == OutputType::EmitCIR) {
+  if (Action == OutputType::EmitCIR ||
+      Action == OutputType::EmitCIRPreLowering) {
+    // Round-trip the parsed module without further passes. The user is
+    // responsible for choosing a pipeline-appropriate input.
     mlir::OpPrintingFlags flags;
     flags.enableDebugInfo(/*enable=*/true, /*prettyForm=*/false);
     Mod.print(*OS, flags);
     return;
   }
 
-  // Run the post-CIRGen pipeline (target-lowering, cxxabi-lowering,
-  // lowering-prepare). LoweringPrepare reads target/LangOpts facts via the
-  // LowerModule we build from the surrounding cc1 invocation, so it does not
-  // need a live ASTContext. IdiomRecognizer is intentionally skipped on this
-  // path -- it documents an AST dependency and is opt-in even on the source
-  // path.
+  // Post-CIRGen pipeline (target-lowering, cxxabi-lowering, lowering-prepare).
+  // LoweringPrepare reads target/LangOpts facts via the LowerModule we build
+  // from the surrounding cc1 invocation, so it does not need a live
+  // ASTContext.
   std::unique_ptr<cir::LowerModule> lowerModule =
       makeLowerModuleFromInvocation(CI, Mod);
   if (!lowerModule) {
     CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
     return;
   }
-  {
-    mlir::PassManager pm(MLIRCtx);
-    pm.addPass(mlir::createCIRCanonicalizePass());
-    pm.addPass(mlir::createTargetLoweringPass());
-    pm.addPass(mlir::createCXXABILoweringPass());
-    pm.addPass(mlir::createLoweringPreparePass(lowerModule.get(),
-                                               &CI.getVirtualFileSystem()));
-    if (mlir::failed(pm.run(Mod))) {
-      CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
-      return;
-    }
+  if (runPostLoweringPasses(Mod, *MLIRCtx, *lowerModule,
+                            &CI.getVirtualFileSystem(),
+                            /*enableVerifier=*/true)
+          .failed()) {
+    CI.getDiagnostics().Report(diag::err_cir_to_cir_transform_failed);
+    return;
   }
 
   llvm::LLVMContext LLVMCtx;
@@ -397,6 +423,10 @@ EmitAssemblyAction::EmitAssemblyAction(mlir::MLIRContext *MLIRCtx)
 void EmitCIRAction::anchor() {}
 EmitCIRAction::EmitCIRAction(mlir::MLIRContext *MLIRCtx)
     : CIRGenAction(OutputType::EmitCIR, MLIRCtx) {}
+
+void EmitCIRPreLoweringAction::anchor() {}
+EmitCIRPreLoweringAction::EmitCIRPreLoweringAction(mlir::MLIRContext *MLIRCtx)
+    : CIRGenAction(OutputType::EmitCIRPreLowering, MLIRCtx) {}
 
 void EmitLLVMAction::anchor() {}
 EmitLLVMAction::EmitLLVMAction(mlir::MLIRContext *MLIRCtx)

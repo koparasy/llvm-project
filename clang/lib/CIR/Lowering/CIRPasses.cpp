@@ -17,20 +17,18 @@
 #include "llvm/Support/VirtualFileSystem.h"
 
 namespace cir {
-mlir::LogicalResult
-runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
-                  clang::ASTContext &astContext, cir::LowerModule &lowerModule,
-                  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs,
-                  bool enableVerifier, bool enableIdiomRecognizer,
-                  bool enableCIRSimplify) {
 
-  llvm::TimeTraceScope scope("CIR To CIR Passes");
+mlir::LogicalResult
+runPreLoweringPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
+                     clang::ASTContext &astContext, bool enableVerifier,
+                     bool enableIdiomRecognizer, bool enableCIRSimplify) {
+  llvm::TimeTraceScope scope("CIR Pre-Lowering Passes");
 
   mlir::PassManager pm(&mlirContext);
   pm.addPass(mlir::createCIRCanonicalizePass());
 
   // Snapshot AST-derived facts into CIR attributes while the ASTContext is
-  // still live, so later passes (notably LoweringPrepare) can run on
+  // still live, so post-lowering passes (notably LoweringPrepare) can run on
   // serialized CIR without an AST.
   pm.addPass(mlir::createMaterializeASTFactsPass());
 
@@ -40,6 +38,19 @@ runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
   if (enableIdiomRecognizer)
     pm.addPass(mlir::createIdiomRecognizerPass(&astContext));
 
+  pm.enableVerifier(enableVerifier);
+  (void)mlir::applyPassManagerCLOptions(pm);
+  return pm.run(theModule);
+}
+
+mlir::LogicalResult
+runPostLoweringPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
+                      cir::LowerModule &lowerModule,
+                      llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs,
+                      bool enableVerifier) {
+  llvm::TimeTraceScope scope("CIR Post-Lowering Passes");
+
+  mlir::PassManager pm(&mlirContext);
   pm.addPass(mlir::createTargetLoweringPass());
   pm.addPass(mlir::createCXXABILoweringPass());
   pm.addPass(mlir::createLoweringPreparePass(&lowerModule, std::move(vfs)));
@@ -47,6 +58,20 @@ runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
   pm.enableVerifier(enableVerifier);
   (void)mlir::applyPassManagerCLOptions(pm);
   return pm.run(theModule);
+}
+
+mlir::LogicalResult
+runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirContext,
+                  clang::ASTContext &astContext, cir::LowerModule &lowerModule,
+                  llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs,
+                  bool enableVerifier, bool enableIdiomRecognizer,
+                  bool enableCIRSimplify) {
+  if (mlir::failed(runPreLoweringPasses(theModule, mlirContext, astContext,
+                                        enableVerifier, enableIdiomRecognizer,
+                                        enableCIRSimplify)))
+    return mlir::failure();
+  return runPostLoweringPasses(theModule, mlirContext, lowerModule,
+                               std::move(vfs), enableVerifier);
 }
 
 } // namespace cir

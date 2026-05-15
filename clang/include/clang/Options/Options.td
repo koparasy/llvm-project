@@ -3367,6 +3367,10 @@ defm clangir : BoolFOption<"clangir",
   BothFlags<[], [ClangOption, CC1Option], "">>;
 def emit_cir : Flag<["-"], "emit-cir">, Visibility<[ClangOption, CC1Option]>,
   Group<Action_Group>, HelpText<"Build ASTs and then lower to ClangIR">;
+def emit_cir_pre_lowering : Flag<["-"], "emit-cir-pre-lowering">,
+  Visibility<[ClangOption, CC1Option]>, Group<Action_Group>,
+  HelpText<"Emit ClangIR before target / C++ ABI / lowering-prepare passes "
+           "have run, suitable as an LTO/Combine link input">;
 /// ClangIR-specific options - END
 
 def flto_EQ : Joined<["-"], "flto=">,

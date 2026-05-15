@@ -35,10 +35,28 @@ namespace cir {
 
 class LowerModule;
 
-// Run set of cleanup/prepare/etc passes CIR <-> CIR. The caller owns
-// `lowerModule`, which provides the target/LangOpts state for AST-free
-// passes (LoweringPrepare and any future helpers). `astCtx` is still
-// required by IdiomRecognizer and the AST-fact materialization pass.
+// CIR-to-CIR pipeline split into two halves so that LTO/Combine flows can
+// stop after the pre-lowering phase, ship the result to disk, and resume
+// later with a separate cc1 invocation.
+//
+// Pre-lowering passes are target-agnostic and rely on a live ASTContext for
+// fact materialization (cir-materialize-ast-facts) and stub passes
+// (cir-idiom-recognizer).  Post-lowering passes are target-bound and
+// AST-free, driven by a `cir::LowerModule` built from the surrounding cc1
+// invocation.
+
+mlir::LogicalResult
+runPreLoweringPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirCtx,
+                     clang::ASTContext &astCtx, bool enableVerifier,
+                     bool enableIdiomRecognizer, bool enableCIRSimplify);
+
+mlir::LogicalResult
+runPostLoweringPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirCtx,
+                      cir::LowerModule &lowerModule,
+                      llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> vfs,
+                      bool enableVerifier);
+
+// Convenience wrapper: pre + post in one call, used by in-process CIRGen.
 mlir::LogicalResult
 runCIRToCIRPasses(mlir::ModuleOp theModule, mlir::MLIRContext &mlirCtx,
                   clang::ASTContext &astCtx, cir::LowerModule &lowerModule,

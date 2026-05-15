@@ -65,8 +65,12 @@ enum ActionKind {
   /// Translate input source into HTML.
   EmitHTML,
 
-  /// Emit a .cir file
+  /// Emit a .cir file (post-lowering CIR; what the LLVM backend sees).
   EmitCIR,
+
+  /// Emit a .cir file before target / C++ ABI / lowering-prepare passes
+  /// have run.  Intended as an LTO / Combine link input.
+  EmitCIRPreLowering,
 
   /// Emit a .ll file.
   EmitLLVM,
