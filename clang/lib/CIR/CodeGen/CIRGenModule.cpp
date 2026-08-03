@@ -442,10 +442,11 @@ void CIRGenModule::emitDeferred() {
         // Functions with an invalid sycl_kernel_entry_point attribute are
         // ignored during device compilation.
         if (!fd->getAttr<SYCLKernelEntryPointAttr>()->isInvalidAttr()) {
-          // Generating the SYCL kernel caller offload entry point is not yet
-          // implemented in CIR.
-          errorNYI(fd->getSourceRange(),
-                   "SYCL kernel caller offload entry point");
+          // Generate and emit the SYCL kernel caller function.
+          emitSYCLKernelCaller(fd, getASTContext());
+          // Recurse to emit any symbols directly or indirectly referenced
+          // by the SYCL kernel caller function.
+          emitDeferred();
         }
         // Do not emit the sycl_kernel_entry_point attributed function.
         continue;
