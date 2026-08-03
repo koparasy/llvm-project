@@ -274,6 +274,15 @@ struct MissingFeatures {
   static bool openCL() { return false; }
   static bool openMP() { return false; }
   static bool sycl() { return false; }
+  // Emission of SYCL kernel attributes (norecurse, mustprogress) and the
+  // general SetLLVMFunctionAttributes pass on the kernel caller entry point.
+  static bool syclKernelAttributes() { return false; }
+  // Application of OutlinedFunctionDecl-derived definition attributes to the
+  // SYCL kernel caller entry point (classic passes the OutlinedFunctionDecl to
+  // SetLLVMFunctionAttributesForDefinition; CIR's setter takes a FunctionDecl).
+  static bool syclKernelCallerDefinitionAttributes() { return false; }
+  // Emission of the sycl-module-id attribute on sycl_external functions.
+  static bool syclExternalAttributes() { return false; }
   static bool opTBAA() { return false; }
   static bool peepholeProtection() { return false; }
   static bool pgoUse() { return false; }

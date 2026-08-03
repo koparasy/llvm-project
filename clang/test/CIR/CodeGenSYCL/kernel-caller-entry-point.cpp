@@ -41,25 +41,29 @@ void test() {
 }
 
 // The kernel caller entry point is named after the kernel name type (KN), is
-// emitted with the spir_kernel calling convention, and its body calls the
-// kernel functor's operator(). The sycl_kernel_entry_point function and its
-// launch call are not emitted during device compilation.
+// emitted with the spir_kernel calling convention, carries the sycl-module-id
+// attribute, and its body calls the kernel functor's operator(). The
+// sycl_kernel_entry_point function and its launch call are not emitted during
+// device compilation.
 // CIR-LABEL: cir.func {{.*}}@_ZTS2KN{{.*}}cc(spir_kernel)
+// CIR-SAME:    "cir.sycl-module-id" = "{{.*}}kernel-caller-entry-point.cpp"
 // CIR:         cir.call @_ZNK1KclEv
 // CIR:         cir.return
 // CIR-NOT:   cir.func {{.*}}@_Z18kernel_single_task
 // CIR-NOT:   cir.call {{.*}}@_Z17sycl_kernel_launch
 
 // The member-function entry point is emitted the same way, as a free function
-// (no implicit `this` parameter).
+// (no implicit `this` parameter), and also carries the sycl-module-id attr.
 // CIR-LABEL: cir.func {{.*}}@_ZTS8MemberKN{{.*}}cc(spir_kernel)
+// CIR-SAME:    "cir.sycl-module-id" = "{{.*}}kernel-caller-entry-point.cpp"
 // CIR:         cir.call @_ZNK1KclEv
 // CIR:         cir.return
 
-// LLVM-LABEL: define {{.*}}spir_kernel void @_ZTS2KN
+// LLVM:      define {{.*}}spir_kernel void @_ZTS2KN{{.*}} #[[ATTR:[0-9]+]]
 // LLVM:         call {{.*}}void @_ZNK1KclEv
 // LLVM:         ret void
 // LLVM-NOT:   define {{.*}}@_Z18kernel_single_task
+// LLVM:      attributes #[[ATTR]] = {{.*}}"sycl-module-id"="{{.*}}kernel-caller-entry-point.cpp"
 
 // OGCG-LABEL: define {{.*}}spir_kernel void @_ZTS2KN
 // OGCG:         call {{.*}}spir_func void @_ZNK1KclEv

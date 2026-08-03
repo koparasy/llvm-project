@@ -137,13 +137,18 @@ void CIRGenModule::emitSYCLKernelCaller(const FunctionDecl *kernelEntryPointFn,
   // target hook, matching how CIRGen sets kernel calling conventions elsewhere.
   funcOp.setCallingConv(getTargetCIRGenInfo().getDeviceKernelCallingConv());
 
-  // TODO: The following attributes applied by classic CodeGen's
-  // EmitSYCLKernelCaller are not yet applied in CIR:
-  //  - SetSYCLKernelAttributes: norecurse and mustprogress.
-  //  - addSYCLModuleIdAttr: the "sycl-module-id" attribute.
-  //  - setDSOLocal.
+  // Mark the entry point with the module identifier so that per-translation-
+  // unit device code splitting can group kernels by their originating module
+  // (see clang-sycl-linker). Mirrors CodeGenModule::addSYCLModuleIdAttr.
+  addSYCLModuleIdAttr(funcOp);
+
+  // Attributes applied by classic CodeGen's EmitSYCLKernelCaller that are not
+  // yet applied in CIR: SetSYCLKernelAttributes (norecurse, mustprogress) and
+  // the general SetLLVMFunctionAttributes pass. Classic also attaches
+  // sycl-module-id to sycl_external functions, which CIR does not yet handle
+  // (see [[syclExternalAttributes]]).
+  assert(!cir::MissingFeatures::syclKernelAttributes());
   assert(!cir::MissingFeatures::setLLVMFunctionFEnvAttributes());
-  assert(!cir::MissingFeatures::setDSOLocal());
 
   // Emit the SYCL kernel caller function.
   CIRGenFunction cgf(*this, builder);
@@ -154,12 +159,31 @@ void CIRGenModule::emitSYCLKernelCaller(const FunctionDecl *kernelEntryPointFn,
   }
   curCGF = nullptr;
 
+  setDSOLocal(static_cast<mlir::Operation *>(funcOp));
   setNonAliasAttributes(GlobalDecl(), funcOp);
   // The SYCL kernel caller is synthesized from an OutlinedFunctionDecl rather
   // than a FunctionDecl. Classic CodeGen passes the OutlinedFunctionDecl to
   // SetLLVMFunctionAttributesForDefinition, but CIR's setter takes a
   // FunctionDecl; passing nullptr here skips OutlinedFunctionDecl-derived
   // attributes (e.g. inline hints), which are not yet handled.
-  assert(!cir::MissingFeatures::opFuncExtraAttrs());
+  assert(!cir::MissingFeatures::syclKernelCallerDefinitionAttributes());
   setCIRFunctionAttributesForDefinition(/*fd=*/nullptr, funcOp);
+}
+
+void CIRGenModule::addSYCLModuleIdAttr(cir::FuncOp fn) {
+  assert(langOpts.SYCLIsDevice);
+  // The module identifier is the name of the main input file, which CIRGen
+  // records as the module's symbol name (see the CIRGenModule constructor).
+  // Fall back to the main file name (empty symbol name occurs for e.g. stdin
+  // or in-memory inputs); the identifier must be non-empty so that per-
+  // translation-unit device code splitting does not collapse distinct modules.
+  StringRef moduleId = getModule().getSymName().value_or("");
+  if (moduleId.empty())
+    moduleId = codeGenOpts.MainFileName;
+  if (moduleId.empty())
+    moduleId = "-";
+  // The "cir." prefix routes this through the CIR-to-LLVM function attribute
+  // translation, which strips the prefix and emits the "sycl-module-id" LLVM
+  // function attribute that clang-sycl-linker consumes.
+  fn->setAttr("cir.sycl-module-id", builder.getStringAttr(moduleId));
 }

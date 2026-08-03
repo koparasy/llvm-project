@@ -659,6 +659,11 @@ public:
   /// function declared with the sycl_kernel_entry_point attribute.
   void emitSYCLKernelCaller(const clang::FunctionDecl *kernelEntryPointFn,
                             clang::ASTContext &ctx);
+
+  /// Attach the "sycl-module-id" attribute, whose value is the module
+  /// identifier, to a SYCL device entry point. Used for per-translation-unit
+  /// device code splitting.
+  void addSYCLModuleIdAttr(cir::FuncOp fn);
   void emitGlobalVarDefinition(const clang::VarDecl *vd,
                                bool isTentative = false);
 
