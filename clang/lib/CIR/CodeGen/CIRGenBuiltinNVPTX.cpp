@@ -1042,7 +1042,11 @@ static mlir::Value packArgsIntoNVPTXFormatBuffer(CIRGenFunction &cgf,
 
   for (auto [i, arg] : llvm::enumerate(llvm::drop_begin(args))) {
     mlir::Value member = builder.createGetMember(
-        loc, cir::PointerType::get(argTypes[i]), alloca, /*name=*/"",
+        loc,
+        builder.getPointerTo(
+            argTypes[i],
+            mlir::cast<cir::PointerType>(alloca.getType()).getAddrSpace()),
+        alloca, /*name=*/"",
         /*index=*/i);
     auto abiAlign = clang::CharUnits::fromQuantity(
         dataLayout.getABITypeAlign(argTypes[i]).value());
@@ -1083,12 +1087,15 @@ CIRGenFunction::emitNVPTXDevicePrintfCallExpr(const CallExpr *expr) {
   mlir::Value packedData = packArgsIntoNVPTXFormatBuffer(*this, args, loc);
 
   // int vprintf(char *format, void *packedData);
+  auto formatString = args[0].getKnownRValue().getValue();
+  mlir::ptr::MemorySpaceAttrInterface formatAddrSpace =
+      mlir::cast<cir::PointerType>(formatString.getType()).getAddrSpace();
   auto vprintf = cgm.createRuntimeFunction(
       cir::FuncType::get(
-          {cir::PointerType::get(builder.getSInt8Ty()), builder.getVoidPtrTy()},
+          {builder.getPointerTo(builder.getSInt8Ty(), formatAddrSpace),
+           builder.getVoidPtrTy()},
           builder.getSInt32Ty()),
       "vprintf");
-  auto formatString = args[0].getKnownRValue().getValue();
   return builder
       .createCallOp(loc, vprintf, mlir::ValueRange{formatString, packedData})
       .getResult();

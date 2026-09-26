@@ -528,7 +528,8 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
   std::string name = getStaticDeclName(*this, d);
 
   mlir::Type lty = getTypes().convertTypeForMem(ty);
-  assert(!cir::MissingFeatures::addressSpace());
+  mlir::ptr::MemorySpaceAttrInterface addrSpace = cir::toCIRAddressSpaceAttr(
+      getMLIRContext(), getGlobalVarAddressSpace(&d));
 
   // OpenCL variables in local address space and CUDA shared
   // variables cannot have an initializer.
@@ -539,8 +540,9 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
   else
     init = builder.getZeroInitAttr(convertType(ty));
 
-  cir::GlobalOp gv = builder.createVersionedGlobal(
-      getModule(), getLoc(d.getLocation()), name, lty, false, linkage);
+  cir::GlobalOp gv =
+      builder.createVersionedGlobal(getModule(), getLoc(d.getLocation()), name,
+                                    lty, false, linkage, addrSpace);
   insertGlobalSymbol(gv);
   // TODO(cir): infer visibility from linkage in global op builder.
   gv.setVisibility(getMLIRVisibilityFromCIRLinkage(linkage));
@@ -555,14 +557,9 @@ CIRGenModule::getOrCreateStaticVarDecl(const VarDecl &d,
 
   setGVProperties(gv, &d);
 
-  // OG checks if the expected address space, denoted by the type, is the
-  // same as the actual address space indicated by attributes. If they aren't
-  // the same, an addrspacecast is emitted when this variable is accessed.
-  // In CIR however, cir.get_global already carries that information in
-  // !cir.ptr type - if this global is in OpenCL local address space, then its
-  // type would be !cir.ptr<..., addrspace(offload_local)>. Therefore we don't
-  // need an explicit address space cast in CIR: they will get emitted when
-  // lowering to LLVM IR.
+  // The global may live in a different address space than the declared type
+  // of the variable. Its users cast the result of cir.get_global to the
+  // declared address space (see castGlobalToDeclAddrSpace).
 
   setStaticLocalDeclAddress(&d, gv);
 
@@ -710,8 +707,17 @@ cir::GlobalOp CIRGenFunction::addInitializerToStaticVarDecl(
     // there's no visibility into the GetGlobalOp corresponding to this Global.
     // Given those constraints, thread in the GetGlobalOp and update it
     // directly.
-    assert(!cir::MissingFeatures::addressSpace());
-    gvAddr.getAddr().setType(builder.getPointerTo(init.getType()));
+    gvAddr.getAddr().setType(
+        builder.getPointerTo(init.getType(), gv.getAddrSpaceAttr()));
+    // Keep the casts to the declared address space in sync.
+    for (mlir::Operation *user : gvAddr->getUsers()) {
+      auto cast = mlir::dyn_cast<cir::CastOp>(user);
+      if (!cast || cast.getKind() != cir::CastKind::address_space)
+        continue;
+      auto castTy = mlir::cast<cir::PointerType>(cast.getType());
+      cast.getResult().setType(
+          builder.getPointerTo(init.getType(), castTy.getAddrSpace()));
+    }
   }
 
   bool needsDtor =
@@ -746,6 +752,7 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
       builder.createGetGlobal(globalOp, d.getTLSKind() != VarDecl::TLS_None);
   auto getAddrOp = addr.getDefiningOp<cir::GetGlobalOp>();
   assert(getAddrOp && "expected cir::GetGlobalOp");
+  addr = cgm.castGlobalToDeclAddrSpace(getAddrOp.getLoc(), addr, d.getType());
 
   CharUnits alignment = getContext().getDeclAlign(&d);
 
@@ -802,8 +809,7 @@ void CIRGenFunction::emitStaticVarDecl(const VarDecl &d,
   //
   // FIXME: It is really dangerous to store this in the map; if anyone
   // RAUW's the GV uses of this constant will be invalid.
-  mlir::Value castedAddr =
-      builder.createBitcast(getAddrOp.getAddr(), expectedType);
+  mlir::Value castedAddr = builder.createBitcast(addr, expectedType);
   localDeclMap.find(&d)->second = Address(castedAddr, elemTy, alignment);
   cgm.setStaticLocalDeclAddress(&d, var);
 
